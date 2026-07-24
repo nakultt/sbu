@@ -9,6 +9,8 @@ export interface Prefs {
   theme: ThemePref;
   accent: Accent;
   grid: boolean;
+  /** Dyslexia-friendly reading: OpenDyslexic + wider letter/word spacing. */
+  dyslexic: boolean;
 }
 
 export const ACCENTS: { value: Accent; label: string }[] = [
@@ -18,7 +20,12 @@ export const ACCENTS: { value: Accent; label: string }[] = [
   { value: "#fda4af", label: "Rose" },
 ];
 
-export const DEFAULT_PREFS: Prefs = { theme: "dark", accent: "#5eead4", grid: true };
+export const DEFAULT_PREFS: Prefs = {
+  theme: "dark",
+  accent: "#5eead4",
+  grid: true,
+  dyslexic: false,
+};
 
 const KEY = "axiom-prefs";
 
@@ -34,6 +41,7 @@ export function readPrefs(): Prefs {
         ? (parsed.accent as Accent)
         : DEFAULT_PREFS.accent,
       grid: parsed.grid !== false,
+      dyslexic: parsed.dyslexic === true,
     };
   } catch {
     return DEFAULT_PREFS;

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.mobile.network.ApiException
 import com.example.mobile.network.StudyBuddyApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
 class AxiomViewModel(private var api: StudyBuddyApi = StudyBuddyApi()) : ViewModel() {
@@ -15,24 +16,28 @@ class AxiomViewModel(private var api: StudyBuddyApi = StudyBuddyApi()) : ViewMod
         viewModelScope.launch {
             data.value = data.value.copy(loading = true, error = null)
             try {
-                val stats = async { api.stats() }
-                val notes = async { api.notes() }
-                val tasks = async { api.tasks() }
-                val decks = async { api.decks() }
-                val statResult = stats.await()
-                val noteResult = notes.await()
-                val taskResult = tasks.await()
-                val deckResult = decks.await()
-                val firstDeck = deckResult.value.firstOrNull()?.let { api.deck(it.id) }
-                data.value = MobileData(
-                    stats = statResult.value,
-                    notes = noteResult.value,
-                    tasks = taskResult.value,
-                    decks = deckResult.value,
-                    selectedDeck = firstDeck?.value,
-                    loading = false,
-                    lastRequestId = firstDeck?.requestId ?: deckResult.requestId,
-                )
+                // coroutineScope contains async failures: a failed fetch rethrows
+                // here (caught below) instead of killing the whole process.
+                coroutineScope {
+                    val stats = async { api.stats() }
+                    val notes = async { api.notes() }
+                    val tasks = async { api.tasks() }
+                    val decks = async { api.decks() }
+                    val statResult = stats.await()
+                    val noteResult = notes.await()
+                    val taskResult = tasks.await()
+                    val deckResult = decks.await()
+                    val firstDeck = deckResult.value.firstOrNull()?.let { api.deck(it.id) }
+                    data.value = MobileData(
+                        stats = statResult.value,
+                        notes = noteResult.value,
+                        tasks = taskResult.value,
+                        decks = deckResult.value,
+                        selectedDeck = firstDeck?.value,
+                        loading = false,
+                        lastRequestId = firstDeck?.requestId ?: deckResult.requestId,
+                    )
+                }
             } catch (error: Exception) {
                 fail(error)
             }

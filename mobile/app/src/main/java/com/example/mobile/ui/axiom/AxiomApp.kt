@@ -37,6 +37,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -73,8 +74,8 @@ import java.time.format.DateTimeFormatter
 
 val ScreenEasing = CubicBezierEasing(0.2f, 0.7f, 0.2f, 1f)
 
-val Mono = FontFamily.Monospace
-val Sans = FontFamily.SansSerif
+// Mono / Sans now live in AxiomType.kt — Sans is a composable getter so the
+// dyslexia-friendly reading toggle can swap it everywhere at once.
 
 @Composable
 fun monoLabel(size: Int, color: Color, tracking: Float = 0.16f) = TextStyle(
@@ -117,6 +118,17 @@ fun AxiomApp() {
         viewModel.connect(cleanApi)
     }
 
+    val appearancePreferences = remember {
+        context.getSharedPreferences("study_buddy_appearance", android.content.Context.MODE_PRIVATE)
+    }
+    var dyslexic by remember {
+        mutableStateOf(appearancePreferences.getBoolean("dyslexic_reading", false))
+    }
+    val setDyslexic: (Boolean) -> Unit = { on ->
+        appearancePreferences.edit().putBoolean("dyslexic_reading", on).apply()
+        dyslexic = on
+    }
+
     var dark by remember { mutableStateOf(true) }
     val themeT by animateFloatAsState(
         targetValue = if (dark) 0f else 1f,
@@ -135,6 +147,7 @@ fun AxiomApp() {
             delay(1000)
             secs -= 1
         }
+        if (secs == 0) running = false
     }
 
     // AI assistant
@@ -156,7 +169,18 @@ fun AxiomApp() {
         }
     }
 
-    CompositionLocalProvider(LocalAxiomColors provides colors) {
+    // Resolved here rather than via the `Sans` getter: inside this argument
+    // list LocalDyslexicReading still holds the *previous* value, since we are
+    // in the middle of providing it.
+    val bodyFont = if (dyslexic) OpenDyslexic else FontFamily.SansSerif
+
+    CompositionLocalProvider(
+        LocalAxiomColors provides colors,
+        LocalDyslexicReading provides dyslexic,
+        // Most Text calls pass only color/fontSize and inherit the rest, so the
+        // ambient style is what carries the typeface swap across the app.
+        LocalTextStyle provides LocalTextStyle.current.merge(TextStyle(fontFamily = bodyFont)),
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -198,12 +222,13 @@ fun AxiomApp() {
                                 onRetry = viewModel::refresh)
                             AxiomScreen.Notes -> NotesScreen(colors, backend, apiBaseUrl, viewModel::refresh)
                             AxiomScreen.Cards -> CardsScreen(colors, backend, viewModel::selectDeck, viewModel::refresh)
-                            AxiomScreen.Plan -> PlannerScreen(colors, backend, viewModel::toggleTask, viewModel::refresh)
+                            AxiomScreen.Plan -> PlannerScreen(colors, backend, apiBaseUrl, viewModel::toggleTask, viewModel::refresh)
                             AxiomScreen.All -> NativeWorkspaceScreen(
                                 colors = colors,
                                 backend = backend,
                                 apiBaseUrl = apiBaseUrl,
                                 onSaveConnection = saveConnection,
+                                onSetDyslexic = setDyslexic,
                                 onRefreshCore = viewModel::refresh,
                             )
                         }
@@ -283,7 +308,13 @@ private fun StatusRow(colors: AxiomColors, backendConnected: Boolean) {
         animationSpec = infiniteRepeatable(tween(1200), RepeatMode.Reverse),
         label = "dot",
     )
-    val time = remember { LocalTime.now().format(DateTimeFormatter.ofPattern("H:mm")) }
+    var time by remember { mutableStateOf(LocalTime.now().format(DateTimeFormatter.ofPattern("H:mm"))) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            time = LocalTime.now().format(DateTimeFormatter.ofPattern("H:mm"))
+            delay(1_000)
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -457,10 +488,7 @@ private fun AiBar(
                             Text("…", style = monoLabel(11, colors.dim, tracking = 0f), modifier = Modifier.graphicsLayer { alpha = a })
                         }
                     } else if (aiAnswer.isNotEmpty()) {
-                        Text(
-                            aiAnswer,
-                            style = TextStyle(fontFamily = Sans, fontSize = 13.sp, lineHeight = 21.sp, color = colors.text),
-                        )
+                        MarkdownText(aiAnswer, colors, fontSize = 13.sp, lineHeight = 21.sp)
                     }
                 }
             }

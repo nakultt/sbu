@@ -13,10 +13,12 @@ interface ThemeContextValue {
   theme: ThemePref;
   accent: Accent;
   grid: boolean;
+  dyslexic: boolean;
   setTheme: (theme: ThemePref) => void;
   toggleTheme: () => void;
   setAccent: (accent: Accent) => void;
   setGrid: (grid: boolean) => void;
+  setDyslexic: (dyslexic: boolean) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -26,6 +28,11 @@ function apply(prefs: Prefs) {
   root.setAttribute("data-theme", prefs.theme);
   root.style.setProperty("--accent", prefs.accent);
   root.style.setProperty("--grid-opacity", prefs.grid ? "0.35" : "0");
+  // Presence of the attribute drives the OpenDyslexic + spacing rules in
+  // globals.css; removing it (rather than setting "false") keeps the
+  // selector simple and stops the font from ever being fetched.
+  if (prefs.dyslexic) root.setAttribute("data-dyslexic", "true");
+  else root.removeAttribute("data-dyslexic");
 }
 
 export default function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -46,10 +53,14 @@ export default function ThemeProvider({ children }: { children: React.ReactNode 
   );
   const setAccent = useCallback((accent: Accent) => setPrefs((p) => ({ ...p, accent })), []);
   const setGrid = useCallback((grid: boolean) => setPrefs((p) => ({ ...p, grid })), []);
+  const setDyslexic = useCallback(
+    (dyslexic: boolean) => setPrefs((p) => ({ ...p, dyslexic })),
+    [],
+  );
 
   return (
     <ThemeContext.Provider
-      value={{ ...prefs, setTheme, toggleTheme, setAccent, setGrid }}
+      value={{ ...prefs, setTheme, toggleTheme, setAccent, setGrid, setDyslexic }}
     >
       {children}
     </ThemeContext.Provider>

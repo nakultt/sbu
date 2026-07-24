@@ -96,3 +96,19 @@ HTTPS, and a release network-security policy; the mobile client should then
 send the issued access token rather than embedding credentials.
 
 No mobile-specific backend process or route set is required.
+
+## Accessibility
+
+**Dyslexia-friendly reading** (ALL → Settings → READING) swaps the body
+typeface to OpenDyslexic and widens tracking and line height on long-form
+markdown. The preference is stored in the `study_buddy_appearance`
+SharedPreferences file and mirrors the same toggle in the web app's Settings.
+
+`Sans` (in `ui/axiom/AxiomType.kt`) is a `@Composable` getter reading
+`LocalDyslexicReading`, so every `fontFamily = Sans` call site follows the
+toggle automatically — new UI should use it rather than `FontFamily.SansSerif`.
+`Mono` is deliberately never swapped: the small uppercase labels and code
+blocks stay more legible in monospace.
+
+The bundled font files under `app/src/main/res/font/` are OpenDyslexic,
+licensed under the SIL Open Font License (see `OPEN_DYSLEXIC_LICENSE.txt`).

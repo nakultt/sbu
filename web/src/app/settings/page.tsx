@@ -32,6 +32,41 @@ function Row({ label, desc, control }: { label: string; desc: string; control: R
   );
 }
 
+function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={() => onChange(!on)}
+      style={{
+        width: 38,
+        height: 20,
+        border: `1px solid ${on ? "var(--accent)" : "var(--line2)"}`,
+        borderRadius: 20,
+        position: "relative",
+        background: "transparent",
+        cursor: "pointer",
+        flexShrink: 0,
+      }}
+    >
+      <span
+        style={{
+          position: "absolute",
+          top: 2,
+          left: on ? 20 : 2,
+          width: 14,
+          height: 14,
+          borderRadius: "50%",
+          background: on ? "var(--accent)" : "var(--dim)",
+          transition: "left 0.25s, background 0.25s",
+          boxShadow: on ? "0 0 10px -2px var(--accent)" : "none",
+        }}
+      />
+    </button>
+  );
+}
+
 function Group({ name, children }: { name: string; children: React.ReactNode }) {
   return (
     <Panel>
@@ -44,7 +79,7 @@ function Group({ name, children }: { name: string; children: React.ReactNode }) 
 }
 
 export default function SettingsPage() {
-  const { theme, accent, grid, setTheme, setAccent, setGrid } = useTheme();
+  const { theme, accent, grid, dyslexic, setTheme, setAccent, setGrid, setDyslexic } = useTheme();
   const [health, setHealth] = useState<Health | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -130,26 +165,21 @@ export default function SettingsPage() {
         <Row
           label="Grid overlay"
           desc="Background reference grid"
+          control={<Toggle on={grid} onChange={setGrid} label="Toggle grid overlay" />}
+        />
+      </Group>
+
+      {/* Reading — accessibility */}
+      <Group name="READING">
+        <Row
+          label="Dyslexia-friendly reading"
+          desc="OpenDyslexic typeface with wider letter and word spacing, taller lines, and a narrower column for notes"
           control={
-            <button
-              onClick={() => setGrid(!grid)}
-              aria-label="Toggle grid overlay"
-              style={{ width: 38, height: 20, border: "1px solid var(--line2)", borderRadius: 20, position: "relative", background: "transparent", cursor: "pointer" }}
-            >
-              <span
-                style={{
-                  position: "absolute",
-                  top: 2,
-                  left: grid ? 20 : 2,
-                  width: 14,
-                  height: 14,
-                  borderRadius: "50%",
-                  background: "var(--accent)",
-                  transition: "left 0.25s",
-                  boxShadow: "0 0 10px -2px var(--accent)",
-                }}
-              />
-            </button>
+            <Toggle
+              on={dyslexic}
+              onChange={setDyslexic}
+              label="Toggle dyslexia-friendly reading"
+            />
           }
         />
       </Group>

@@ -150,7 +150,7 @@ export default function Topbar({ onMenu }: { onMenu: () => void }) {
               border: "none",
               outline: "none",
               color: "var(--text)",
-              fontFamily: "var(--font-space-grotesk), sans-serif",
+              fontFamily: "var(--font-body)",
               fontSize: 13,
               minWidth: 0,
             }}

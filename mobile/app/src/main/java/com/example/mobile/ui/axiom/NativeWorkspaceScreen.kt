@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -54,12 +56,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.io.File
 import java.net.URLEncoder
 import java.net.URL
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneOffset
+import java.time.OffsetDateTime
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
@@ -69,6 +74,7 @@ fun NativeWorkspaceScreen(
     backend: MobileData,
     apiBaseUrl: String,
     onSaveConnection: (String) -> Unit,
+    onSetDyslexic: (Boolean) -> Unit,
     onRefreshCore: () -> Unit,
 ) {
     var selected by remember { mutableStateOf<NativeFeature?>(null) }
@@ -117,7 +123,7 @@ fun NativeWorkspaceScreen(
             "audiobooks" -> AudiobooksNative(colors, api)
             "tasks" -> TasksNative(colors, api, onRefreshCore)
             "calendar" -> CalendarNative(colors, api)
-            "settings" -> SettingsNative(colors, backend, api, apiBaseUrl, onSaveConnection, onRefreshCore)
+            "settings" -> SettingsNative(colors, backend, api, apiBaseUrl, onSaveConnection, onSetDyslexic, onRefreshCore)
         }
     }
 }
@@ -282,7 +288,7 @@ private fun AskNative(colors: AxiomColors, api: StudyBuddyApi) {
             "Transcribed: ${result.value.optString("transcript")}"
         }
         StatusText(colors, message)
-        if (answer.isNotBlank()) NativeCard(colors, accent = true) { Text(answer, color = colors.text, fontSize = 13.sp, lineHeight = 20.sp) }
+        if (answer.isNotBlank()) NativeCard(colors, accent = true) { MarkdownText(answer, colors) }
         Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
             Text("History", style = sectionStyle(colors))
             Text("CLEAR", style = monoLabel(9, colors.accent, 0.1f), modifier = Modifier.axClick {
@@ -292,7 +298,7 @@ private fun AskNative(colors: AxiomColors, api: StudyBuddyApi) {
         history.objects().takeLast(20).forEach { turn ->
             NativeCard(colors) {
                 Text(turn.optString("role").uppercase(), style = monoLabel(9, colors.accent, 0.1f))
-                Text(turn.optString("content"), color = colors.text, fontSize = 12.sp)
+                Text(markdownAnnotated(turn.optString("content"), colors), color = colors.text, fontSize = 12.sp)
             }
         }
     }
@@ -380,7 +386,7 @@ private fun VideoNative(colors: AxiomColors, api: StudyBuddyApi, refreshCore: ()
             NativeCard(colors, accent = true) {
                 Text(frame.optString("title").ifBlank { frame.optString("filename") }, color = colors.text, fontWeight = FontWeight.Medium)
                 RemoteImage("${api.serverUrl}${frame.optString("image_url")}", 280)
-                frame.optString("formatted_markdown").takeIf { it.isNotBlank() }?.let { Text(it, color = colors.text, fontSize = 11.sp) }
+                frame.optString("formatted_markdown").takeIf { it.isNotBlank() }?.let { MarkdownText(it, colors, fontSize = 11.sp, lineHeight = 17.sp) }
                 NativeButton(colors, "RUN CROP OCR") {
                     scope.launch { runAction({ api.consumeEventStream("/api/video/frames/${frame.getInt("id")}/ocr-stream"); detail = api.objectRequest("/api/video/frames/${frame.getInt("id")}").value }, { message = it }) }
                 }
@@ -423,7 +429,7 @@ private fun FlashcardsNative(colors: AxiomColors, api: StudyBuddyApi, refreshCor
                 NativeCard(colors, accent = true, onClick = { back = !back }) {
                     Text(if (back) "ANSWER" else "QUESTION", style = monoLabel(9, colors.accent, 0.12f))
                     Spacer(Modifier.height(24.dp))
-                    Text(if (back) card.optString("back") else card.optString("front"), color = colors.text, fontSize = 17.sp, lineHeight = 25.sp)
+                    Text(markdownAnnotated(if (back) card.optString("back") else card.optString("front"), colors), color = colors.text, fontSize = 17.sp, lineHeight = 25.sp)
                     Text("Tap card to flip · ${index + 1}/${cards.length()}", color = colors.dim, fontSize = 10.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         NativeButton(colors, "PREV", Modifier.weight(1f)) { index = (index - 1 + cards.length()) % cards.length(); back = false }
@@ -548,21 +554,60 @@ private fun CalendarNative(colors: AxiomColors, api: StudyBuddyApi) {
         status = api.objectRequest("/api/calendar/google/status").value
         proposals = api.arrayRequest("/api/calendar/proposals").value
         if (status?.optBoolean("connected") == true) {
-            val start = visibleMonth.atStartOfDay().toInstant(ZoneOffset.UTC).toString()
-            val end = visibleMonth.plusMonths(1).atStartOfDay().toInstant(ZoneOffset.UTC).toString()
+            val zone = ZoneId.systemDefault()
+            val start = visibleMonth.atStartOfDay(zone).toInstant().toString()
+            val end = visibleMonth.plusMonths(1).atStartOfDay(zone).toInstant().toString()
             events = api.arrayRequest("/api/calendar/google/events?time_min=${enc(start)}&time_max=${enc(end)}").value
         } else events = JSONArray()
     }
-    LaunchedEffect(reload, visibleMonth) { runCatching { load() }.onFailure { message = it.message.orEmpty() } }
+    LaunchedEffect(reload, visibleMonth) {
+        try {
+            load()
+            message = ""
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            // A restart (month change / resume refetch) is not an error.
+            throw cancelled
+        } catch (error: Exception) {
+            message = error.message.orEmpty()
+        }
+    }
+    // Refetch when the user comes back from the Google sign-in browser tab.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) reload++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     NativeScroll {
         Text("Google Calendar", style = titleStyle(colors))
         val connected = status?.optBoolean("connected") == true
-        Text(if (connected) "CONNECTED" else if (status?.optBoolean("configured") == true) "READY TO CONNECT" else "OAUTH NOT CONFIGURED", style = monoLabel(10, if (connected) colors.accent else colors.dim, 0.1f))
-        if (!connected) NativeButton(colors, "CONNECT") {
-            scope.launch { runAction({ val url = api.objectRequest("/api/calendar/google/auth-url").value.getString("url"); openUrl(context, url) }, { message = it }) }
-        } else {
+        Text(
+            when {
+                connected -> "CONNECTED"
+                status == null -> "BACKEND OFFLINE · CALENDAR IN LOCAL MODE"
+                status?.optBoolean("configured") == true -> "READY TO CONNECT"
+                else -> "OAUTH NOT CONFIGURED"
+            },
+            style = monoLabel(10, if (connected) colors.accent else colors.dim, 0.1f),
+        )
+        if (!connected && status != null) {
+            NativeButton(colors, "CONNECT") {
+                scope.launch { runAction({ val url = api.objectRequest("/api/calendar/google/auth-url").value.getString("url"); openUrl(context, url) }, { message = it }) }
+            }
+            Text(
+                "If Google sign-in cannot finish on the phone (the redirect goes to the laptop), connect once from the web app — the phone shares that connection automatically.",
+                color = colors.dim, fontSize = 10.sp,
+            )
+        } else if (connected) {
             NativeButton(colors, "SYNC") { scope.launch { runAction({ api.objectRequest("/api/calendar/google/sync", "POST", JSONObject()); load() }, { message = it }) } }
             NativeButton(colors, "DISCONNECT") { scope.launch { runAction({ api.objectRequest("/api/calendar/google", "DELETE"); load() }, { message = it }) } }
+        } else {
+            Text(
+                "The study-buddy server is unreachable, so Google events can't load. The month view below still works — reconnect and tap REFRESH to sync.",
+                color = colors.dim, fontSize = 10.sp,
+            )
         }
         StatusText(colors, message)
         Row(
@@ -591,7 +636,7 @@ private fun CalendarNative(colors: AxiomColors, api: StudyBuddyApi) {
             colors = colors,
             month = visibleMonth,
             selectedDate = selectedDate,
-            events = events,
+            eventCounts = dayMarkers(emptyList(), events.objects().map { it.optString("start") }),
             onSelect = { date ->
                 selectedDate = date
                 if (date.month != visibleMonth.month || date.year != visibleMonth.year) {
@@ -599,9 +644,7 @@ private fun CalendarNative(colors: AxiomColors, api: StudyBuddyApi) {
                 }
             },
         )
-        val selectedEvents = events.objects().filter {
-            runCatching { LocalDate.parse(it.optString("start").take(10)) }.getOrNull() == selectedDate
-        }
+        val selectedEvents = events.objects().filter { eventLocalDate(it.optString("start")) == selectedDate }
         Text(
             selectedDate.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())),
             style = sectionStyle(colors),
@@ -627,19 +670,23 @@ private fun CalendarNative(colors: AxiomColors, api: StudyBuddyApi) {
     }
 }
 
+/**
+ * Month view shared by the Calendar tool and the Plan tab. Callers supply the
+ * per-day marker counts so this stays agnostic about whether a dot is a Google
+ * event, a task due date, or both.
+ */
 @Composable
-private fun MonthGrid(
+internal fun MonthGrid(
     colors: AxiomColors,
     month: LocalDate,
     selectedDate: LocalDate,
-    events: JSONArray,
+    eventCounts: Map<LocalDate, Int>,
     onSelect: (LocalDate) -> Unit,
 ) {
-    val eventCounts = events.objects().mapNotNull { event ->
-        runCatching { LocalDate.parse(event.optString("start").take(10)) }.getOrNull()
-    }.groupingBy { it }.eachCount()
     val firstVisibleDate = month.minusDays((month.dayOfWeek.value % 7).toLong())
     val cells = List(42) { firstVisibleDate.plusDays(it.toLong()) }
+    // Own column: keeps week rows contiguous instead of inheriting the scroll column's item spacing.
+    Column(Modifier.fillMaxWidth()) {
     Row(Modifier.fillMaxWidth()) {
         listOf("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT").forEach {
             Text(
@@ -653,6 +700,7 @@ private fun MonthGrid(
     cells.chunked(7).forEach { week ->
         Row(Modifier.fillMaxWidth()) {
             week.forEach { date ->
+
                 val selected = date == selectedDate
                 val today = date == LocalDate.now()
                 val inMonth = date.month == month.month && date.year == month.year
@@ -698,13 +746,14 @@ private fun MonthGrid(
             }
         }
     }
+    }
 }
 
 @Composable
-private fun CalendarEventCard(colors: AxiomColors, context: android.content.Context, event: JSONObject) {
+internal fun CalendarEventCard(colors: AxiomColors, context: android.content.Context, event: JSONObject) {
     NativeCard(colors) {
         Text(event.optString("summary").ifBlank { "Untitled event" }, color = colors.text, fontSize = 13.sp)
-        Text(if (event.optBoolean("all_day")) "All day" else event.optString("start"), color = colors.dim, fontSize = 10.sp)
+        Text(if (event.optBoolean("all_day")) "All day" else formatEventTime(event.optString("start"), event.optString("end")), color = colors.dim, fontSize = 10.sp)
         event.optString("location").takeIf { it.isNotBlank() }?.let { Text(it, color = colors.dim, fontSize = 10.sp) }
         event.optString("description").takeIf { it.isNotBlank() }?.let { Text(it, color = colors.dim, fontSize = 11.sp) }
         event.optString("html_link").takeIf { it.isNotBlank() }?.let { link ->
@@ -720,6 +769,7 @@ private fun SettingsNative(
     api: StudyBuddyApi,
     apiBaseUrl: String,
     onSave: (String) -> Unit,
+    onSetDyslexic: (Boolean) -> Unit,
     refreshCore: () -> Unit,
 ) {
     var health by remember { mutableStateOf<JSONObject?>(null) }
@@ -742,8 +792,52 @@ private fun SettingsNative(
                 Text("${stats.diskUsedGb} / ${stats.diskTotalGb} GB disk used", color = colors.dim, fontSize = 11.sp)
             }
         }
+        ReadingPanel(colors, onSetDyslexic)
         StatusText(colors, message)
         NativeButton(colors, "REFRESH EVERYTHING") { refreshCore() }
+    }
+}
+
+/** Dyslexia-friendly reading toggle — mirrors the web app's Reading setting. */
+@Composable
+private fun ReadingPanel(colors: AxiomColors, onSetDyslexic: (Boolean) -> Unit) {
+    val on = LocalDyslexicReading.current
+    NativeCard(colors) {
+        Text("READING", style = monoLabel(10, colors.accent, 0.12f))
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text("Dyslexia-friendly reading", style = sectionStyle(colors))
+                Text(
+                    "OpenDyslexic typeface with wider letter spacing and taller lines",
+                    color = colors.dim,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                )
+            }
+            AxSwitch(colors, on, onSetDyslexic)
+        }
+    }
+}
+
+@Composable
+private fun AxSwitch(colors: AxiomColors, on: Boolean, onChange: (Boolean) -> Unit) {
+    val knobOffset by animateDpAsState(if (on) 20.dp else 2.dp, label = "knob")
+    Box(
+        Modifier
+            .size(width = 42.dp, height = 24.dp)
+            .border(1.dp, if (on) colors.accent else colors.line2)
+            .axClick { onChange(!on) },
+    ) {
+        Box(
+            Modifier
+                .offset(x = knobOffset, y = 4.dp)
+                .size(16.dp)
+                .background(if (on) colors.accent else colors.dim)
+        )
     }
 }
 
@@ -865,13 +959,34 @@ private fun NativeButton(
 @Composable private fun StatusText(colors: AxiomColors, text: String) {
     if (text.isNotBlank()) Text(text, color = if (text.contains("fail", true) || text.contains("error", true) || text.contains("cannot", true)) Color(0xFFF87171) else colors.dim, fontSize = 10.sp)
 }
-private fun titleStyle(colors: AxiomColors) = TextStyle(fontFamily = Sans, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = colors.text)
-private fun sectionStyle(colors: AxiomColors) = TextStyle(fontFamily = Sans, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.text)
-private fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
+@Composable private fun titleStyle(colors: AxiomColors) = TextStyle(fontFamily = Sans, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = colors.text)
+@Composable private fun sectionStyle(colors: AxiomColors) = TextStyle(fontFamily = Sans, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.text)
+internal fun JSONArray.objects(): List<JSONObject> = (0 until length()).map { getJSONObject(it) }
 private fun JSONObject.textOrEmpty(name: String): String =
     if (!has(name) || isNull(name)) "" else optString(name)
-private fun formatSeconds(value: Double) = "${(value / 60).toInt()}:${(value.toInt() % 60).toString().padStart(2, '0')}"
-private fun enc(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
+private fun formatSeconds(value: Double) =
+    if (value.isNaN()) "0:00"
+    else "${(value / 60).toInt()}:${(value.toInt() % 60).toString().padStart(2, '0')}"
+internal fun enc(value: String) = URLEncoder.encode(value, Charsets.UTF_8.name())
+
+/** Google events carry either a plain date or an offset date-time; map both to the device's local day. */
+private fun formatEventTime(start: String, end: String): String = runCatching {
+    val zone = ZoneId.systemDefault()
+    val startAt = OffsetDateTime.parse(start).atZoneSameInstant(zone)
+    val dayFmt = DateTimeFormatter.ofPattern("EEE, d MMM", Locale.getDefault())
+    val timeFmt = DateTimeFormatter.ofPattern("H:mm")
+    val endAt = runCatching { OffsetDateTime.parse(end).atZoneSameInstant(zone) }.getOrNull()
+    buildString {
+        append(startAt.format(dayFmt))
+        append(" · ")
+        append(startAt.format(timeFmt))
+        if (endAt != null) {
+            append(" – ")
+            append(endAt.format(timeFmt))
+        }
+    }
+}.getOrDefault(start)
+
 private fun openUrl(context: android.content.Context, url: String) {
     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
 }

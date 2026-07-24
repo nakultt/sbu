@@ -42,6 +42,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -54,6 +55,7 @@ import com.example.mobile.network.StudyBuddyApi
 import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.WeekFields
 import java.util.Locale
@@ -317,10 +319,7 @@ fun NotesScreen(colors: AxiomColors, data: MobileData, apiBaseUrl: String, onRet
                             }
                         }
                     }
-                    Text(
-                        note.optString("markdown"),
-                        style = TextStyle(fontFamily = Sans, fontSize = 13.sp, lineHeight = 20.sp, color = colors.text),
-                    )
+                    MarkdownText(note.optString("markdown"), colors)
                 }
             }
             return@ScreenColumn
@@ -426,7 +425,7 @@ fun CardsScreen(
                     Box(Modifier.fillMaxSize().graphicsLayer { if (showingBack) rotationY = 180f }) {
                         Text(if (showingBack) "ANSWER" else "QUESTION", style = monoLabel(9, colors.faint, 0.2f))
                         Text(
-                            if (showingBack) card.back else card.front,
+                            markdownAnnotated(if (showingBack) card.back else card.front, colors),
                             modifier = Modifier.align(Alignment.Center),
                             textAlign = TextAlign.Center,
                             style = TextStyle(
@@ -455,42 +454,124 @@ fun CardsScreen(
 fun PlannerScreen(
     colors: AxiomColors,
     data: MobileData,
+    apiBaseUrl: String,
     onToggleTask: (BackendTask) -> Unit,
     onRetry: () -> Unit,
 ) {
+    val context = LocalContext.current
     val today = LocalDate.now()
     val week = today.get(WeekFields.of(Locale.getDefault()).weekOfWeekBasedYear())
+    val api = remember(apiBaseUrl) { StudyBuddyApi(apiBaseUrl) }
+
+    var visibleMonth by remember { mutableStateOf(today.withDayOfMonth(1)) }
+    var selectedDate by remember { mutableStateOf(today) }
+    var events by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+
+    // Google events are a bonus here: the planner still works from tasks alone when
+    // the backend is unreachable or the calendar was never connected.
+    LaunchedEffect(visibleMonth, apiBaseUrl) {
+        events = runCatching {
+            val zone = ZoneId.systemDefault()
+            val start = visibleMonth.atStartOfDay(zone).toInstant().toString()
+            val end = visibleMonth.plusMonths(1).atStartOfDay(zone).toInstant().toString()
+            api.arrayRequest(
+                "/api/calendar/google/events?time_min=${enc(start)}&time_max=${enc(end)}"
+            ).value.objects()
+        }.getOrDefault(emptyList())
+    }
+
+    val markers = dayMarkers(
+        taskDues = data.tasks.map { it.due },
+        eventStarts = events.map { it.optString("start") },
+    )
+    val tasksForDay = data.tasks.filter { taskDueDate(it.due) == selectedDate }
+    val eventsForDay = events.filter { eventLocalDate(it.optString("start")) == selectedDate }
+    val undated = data.tasks.filter { taskDueDate(it.due) == null }
+
     ScreenColumn(gap = 14) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
             Text("Week $week", style = TextStyle(fontFamily = Sans, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = colors.text))
             Text(today.format(DateTimeFormatter.ofPattern("MMM yyyy")).uppercase(), style = monoLabel(10, colors.dim, 0.14f))
         }
         BackendState(data, colors, onRetry)
-        if (!data.loading && data.tasks.isEmpty()) {
-            Text("No tasks in the backend.", color = colors.dim, fontSize = 13.sp)
+
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("‹", style = monoLabel(18, colors.accent, 0f), modifier = Modifier.axClick {
+                visibleMonth = visibleMonth.minusMonths(1)
+            })
+            Text(
+                visibleMonth.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())),
+                style = TextStyle(fontFamily = Sans, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = colors.text),
+            )
+            Text("›", style = monoLabel(18, colors.accent, 0f), modifier = Modifier.axClick {
+                visibleMonth = visibleMonth.plusMonths(1)
+            })
         }
-        data.tasks.forEach { task ->
-            Row(
-                Modifier.fillMaxWidth().border(1.dp, colors.line).background(colors.panel)
-                    .axClick { onToggleTask(task) }.padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(
-                    Modifier.size(10.dp).border(1.dp, colors.accent)
-                        .background(if (task.done) colors.accent else Color.Transparent)
-                )
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        task.label,
-                        style = TextStyle(
-                            fontFamily = Sans, fontSize = 13.sp, color = if (task.done) colors.faint else colors.text,
-                            textDecoration = if (task.done) TextDecoration.LineThrough else null,
-                        ),
-                    )
-                    Text(task.due ?: "No due date", style = monoLabel(9, colors.dim, 0.04f))
+        MonthGrid(
+            colors = colors,
+            month = visibleMonth,
+            selectedDate = selectedDate,
+            eventCounts = markers,
+            onSelect = { date ->
+                selectedDate = date
+                if (date.month != visibleMonth.month || date.year != visibleMonth.year) {
+                    visibleMonth = date.withDayOfMonth(1)
                 }
-            }
+            },
+        )
+
+        Text(
+            selectedDate.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault())),
+            style = TextStyle(fontFamily = Sans, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = colors.text),
+        )
+        if (tasksForDay.isEmpty() && eventsForDay.isEmpty()) {
+            Text("Nothing scheduled on this day.", color = colors.dim, fontSize = 12.sp)
+        }
+        eventsForDay.forEach { event ->
+            CalendarEventCard(colors, context, event)
+        }
+        tasksForDay.forEach { task ->
+            PlannerTaskRow(colors, task, onToggleTask)
+        }
+
+        if (undated.isNotEmpty()) {
+            Text("No due date", style = monoLabel(10, colors.dim, 0.12f))
+        }
+        undated.forEach { task ->
+            PlannerTaskRow(colors, task, onToggleTask)
+        }
+    }
+}
+
+@Composable
+private fun PlannerTaskRow(
+    colors: AxiomColors,
+    task: BackendTask,
+    onToggleTask: (BackendTask) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().border(1.dp, colors.line).background(colors.panel)
+            .axClick { onToggleTask(task) }.padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(
+            Modifier.size(10.dp).border(1.dp, colors.accent)
+                .background(if (task.done) colors.accent else Color.Transparent)
+        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                task.label,
+                style = TextStyle(
+                    fontFamily = Sans, fontSize = 13.sp, color = if (task.done) colors.faint else colors.text,
+                    textDecoration = if (task.done) TextDecoration.LineThrough else null,
+                ),
+            )
+            Text(task.due ?: "No due date", style = monoLabel(9, colors.dim, 0.04f))
         }
     }
 }

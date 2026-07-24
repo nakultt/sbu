@@ -52,3 +52,19 @@ cannot fail because of an HTTP proxy timeout.
 bun --cwd web run lint
 bun --cwd web run build
 ```
+
+## Accessibility
+
+**Dyslexia-friendly reading** (Settings → READING) sets `data-dyslexic="true"`
+on `<html>`, which swaps `--font-body` to OpenDyslexic and opens up letter,
+word, and line spacing; long-form surfaces (`.study-note`, `.axscreen`) also
+get a 66ch measure. It is stored alongside the other appearance prefs under
+`axiom-prefs` and applied pre-hydration by the bootstrap script in
+`layout.tsx`, so there is no font flash on load.
+
+Use `var(--font-body)` (or Tailwind's `font-sans` / `font-display`) for body
+copy so it follows the toggle. `--font-mono` is deliberately never swapped —
+the small uppercase labels and code stay clearer in JetBrains Mono.
+
+OpenDyslexic ships via `@fontsource/opendyslexic` (SIL Open Font License) and is
+self-hosted; the browser only fetches the files once the toggle is on.

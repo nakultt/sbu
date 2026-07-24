@@ -9,6 +9,15 @@
 :root {
   --accent: #5eead4;
 
+  /* Body/heading typeface. Swapped wholesale by the dyslexia-friendly
+     reading toggle; --font-mono is deliberately never swapped, since the
+     small uppercase labels and code blocks stay more legible in JetBrains. */
+  --font-body: var(--font-space-grotesk), sans-serif;
+  --reading-leading: 1.75;
+  --reading-tracking: 0em;
+  --reading-word-spacing: normal;
+  --reading-measure: none;
+
   --bg: #070b11;
   --panel: rgba(12, 18, 27, 0.55);
   --panel2: rgba(18, 27, 41, 0.7);
@@ -34,6 +43,10 @@
   --chip-blue: color-mix(in srgb, #7dd3fc 16%, transparent);
   --chip-green: color-mix(in srgb, #5eead4 16%, transparent);
   --chip-orange: color-mix(in srgb, #fda4af 16%, transparent);
+  /* Foreground form of the chip-orange rose. The --chip-* tokens are already
+     ~16% transparent because they are chip *backgrounds*; strokes, text, and
+     bar fills that mark weak or at-risk states need the solid hue. */
+  --warn: #fda4af;
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.35);
   --shadow-float: 0 24px 80px rgba(0, 0, 0, 0.6);
 }
@@ -43,27 +56,59 @@
   --panel: rgba(255, 255, 255, 0.6);
   --panel2: rgba(233, 238, 245, 0.72);
   --line: rgba(30, 60, 95, 0.14);
-  /* Foreground form of the chip-orange rose. The --chip-* tokens are already
-     ~16% transparent because they are chip *backgrounds*; strokes, text, and
-     bar fills that mark weak or at-risk states need the solid hue. */
-  --warn: #fda4af;
   --line2: rgba(30, 60, 95, 0.28);
   --text: #17222f;
   --dim: #5b6c7f;
   --faint: #9fb0c2;
   --blur: blur(16px) saturate(1.3);
   --g2: rgba(90, 150, 230, 0.14);
+  /* Same rose, deepened so it still reads as a warning against a light page. */
+  --warn: #be3455;
 
   --shadow-card: 0 1px 2px rgba(24, 24, 33, 0.05), 0 10px 35px rgba(24, 24, 33, 0.08);
   --shadow-float: 0 24px 70px rgba(32, 30, 60, 0.18);
 }
 
+/* ── Dyslexia-friendly reading ─────────────────────────────────────────
+   Set by ThemeProvider (and the pre-hydration script) on <html>. Swaps in
+   OpenDyslexic and opens up the spacing: the spacing changes carry more of
+   the readability benefit than the typeface does, so they travel together.
+   UI chrome gets a gentler version of the same treatment so fixed-height
+   buttons and nav rows don't blow out.                                    */
+[data-dyslexic="true"] {
+  --font-body: "OpenDyslexic", var(--font-space-grotesk), sans-serif;
+  --reading-leading: 1.8;
+  --reading-tracking: 0.05em;
+  --reading-word-spacing: 0.16em;
+  --reading-measure: 66ch;
+}
+
+[data-dyslexic="true"] body {
+  line-height: 1.6;
+  letter-spacing: 0.03em;
+  word-spacing: 0.1em;
+}
+
+/* Long-form reading surfaces get the full treatment, including a capped
+   measure — long lines are where tracking is most often lost. */
+[data-dyslexic="true"] :is(.study-note, .axscreen) :is(p, li, blockquote, dd) {
+  line-height: var(--reading-leading);
+  letter-spacing: var(--reading-tracking);
+  word-spacing: var(--reading-word-spacing);
+  max-width: var(--reading-measure);
+}
+
+/* OpenDyslexic's weighted bottoms need a little more room between lines
+   than Space Grotesk did at the same size. */
+[data-dyslexic="true"] :is(h1, h2, h3) {
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+}
+
 @theme inline {
-  --font-sans: var(--font-space-grotesk);
-  --font-display: var(--font-space-grotesk);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-body);
   --font-mono: var(--font-jetbrains-mono);
-  /* Same rose, deepened so it still reads as a warning against a light page. */
-  --warn: #be3455;
   /* Axiom colors */
   --color-bg: var(--bg);
   --color-panel: var(--panel);
@@ -102,7 +147,7 @@ body {
   min-width: 320px;
   background: var(--bg);
   color: var(--text);
-  font-family: var(--font-space-grotesk), sans-serif;
+  font-family: var(--font-body);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   text-rendering: optimizeLegibility;
 }
@@ -122,7 +167,7 @@ h1,
 h2,
 h3,
 .font-display {
-  font-family: var(--font-space-grotesk), sans-serif;
+  font-family: var(--font-body);
 }
 
 button,
@@ -454,20 +499,6 @@ textarea::placeholder {
   50% { opacity: 0.9; transform: scale(1.04); }
 }
 
-@keyframes note-shimmer {
-  from { background-position: 110% 0; }
-  to { background-position: -110% 0; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-    transition-duration: 0.01ms !important;
-  }
-}
 /* ── Adaptive learning path ────────────────────────────────────────────
    Chart and list motion. Everything animates transform, opacity, or
    stroke-dashoffset only, so nothing triggers layout. Marks that draw
@@ -542,3 +573,18 @@ textarea::placeholder {
 }
 
 .quiz-wrong { animation: shake 320ms ease-in-out; }
+
+@keyframes note-shimmer {
+  from { background-position: 110% 0; }
+  to { background-position: -110% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
