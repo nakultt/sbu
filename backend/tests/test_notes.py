@@ -1,7 +1,43 @@
 import unittest
+import threading
+from unittest.mock import patch
 
 import core.ingest as ingest
-from core.ingest import _assemble_structured_notes, _clean_generated_markdown
+from core.ingest import _assemble_structured_notes, _clean_generated_markdown, _extract
+
+
+class PdfExtractionTests(unittest.TestCase):
+    @patch(
+        "core.ocr.extract_pdf",
+        return_value=[{"page": 1, "text": "Ohm's law relates voltage and current."}],
+    )
+    def test_pdf_ingestion_uses_the_ocr_public_interface(self, extract_pdf):
+        item = {"id": 42, "kind": "pdf", "stored_path": "/tmp/lecture.pdf"}
+
+        chunks = _extract(item)
+
+        extract_pdf.assert_called_once_with("/tmp/lecture.pdf")
+        self.assertEqual(chunks[0]["page"], 1)
+        self.assertIn("Ohm's law", chunks[0]["text"])
+
+    def test_worker_logging_does_not_conflict_with_log_record_fields(self):
+        stop = threading.Event()
+        item = {"id": 42, "filename": "lecture.pdf"}
+
+        def finish_processing(_item):
+            stop.set()
+
+        with (
+            patch.object(ingest.db, "init_db"),
+            patch.object(ingest, "_sweep_inbox"),
+            patch.object(ingest.db, "claim_next_pending_item", return_value=item),
+            patch.object(ingest, "process_item", side_effect=finish_processing) as process,
+            patch.object(ingest.db, "set_status") as set_status,
+        ):
+            ingest.worker_loop(stop)
+
+        process.assert_called_once_with(item)
+        set_status.assert_not_called()
 
 
 class GenerateNotesVisualTests(unittest.TestCase):

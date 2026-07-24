@@ -207,7 +207,7 @@ def _extract(item: dict) -> list[dict]:
                 "page": p["page"],
                 "image_path": p.get("image_path"),
             }
-            for p in extract_pdf(path, item_id=item["id"])
+            for p in extract_pdf(path)
             for chunk in _split(p["text"])
         ]
 
@@ -484,7 +484,10 @@ def worker_loop(stop: threading.Event | None = None):
             try:
                 logger.info(
                     "ingestion started",
-                    extra={"item_id": item["id"], "filename": item["filename"]},
+                    extra={
+                        "item_id": item["id"],
+                        "source_filename": item["filename"],
+                    },
                 )
                 process_item(item)
                 logger.info("ingestion completed", extra={"item_id": item["id"]})

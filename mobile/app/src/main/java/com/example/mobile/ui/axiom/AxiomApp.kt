@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -63,6 +64,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -92,6 +95,11 @@ fun Modifier.axClick(onClick: () -> Unit): Modifier = this.then(
 
 @Composable
 fun AxiomApp() {
+    val viewModel: AxiomViewModel = viewModel()
+    val backend by viewModel.data
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) { viewModel.refresh() }
+
     var dark by remember { mutableStateOf(true) }
     val themeT by animateFloatAsState(
         targetValue = if (dark) 0f else 1f,
@@ -117,20 +125,18 @@ fun AxiomApp() {
     var aiOpen by remember { mutableStateOf(false) }
     var aiThinking by remember { mutableStateOf(false) }
     var aiAnswer by remember { mutableStateOf("") }
-    var aiRequest by remember { mutableIntStateOf(0) }
-    LaunchedEffect(aiRequest) {
-        if (aiRequest > 0) {
-            delay(750)
-            aiThinking = false
-            aiAnswer = AxiomContent.answerFor(query)
-        }
-    }
     val askAI = ask@{
         if (query.isBlank()) return@ask
         aiOpen = true
         aiThinking = true
         aiAnswer = ""
-        aiRequest += 1
+        val submitted = query
+        scope.launch {
+            viewModel.ask(submitted)
+                .onSuccess { aiAnswer = it }
+                .onFailure { aiAnswer = it.message ?: "The backend could not answer." }
+            aiThinking = false
+        }
     }
 
     CompositionLocalProvider(LocalAxiomColors provides colors) {
@@ -143,7 +149,7 @@ fun AxiomApp() {
 
             Column(modifier = Modifier.fillMaxSize()) {
                 Column(modifier = Modifier.statusBarsPadding()) {
-                    StatusRow(colors)
+                    StatusRow(colors, backend.stats != null)
                     TopBar(colors, dark) { dark = !dark }
                     AiBar(
                         colors = colors,
@@ -168,12 +174,15 @@ fun AxiomApp() {
                         label = "screen",
                     ) { current ->
                         when (current) {
-                            AxiomScreen.Home -> HomeScreen(colors, secs, running,
+                            AxiomScreen.Home -> HomeScreen(colors, backend, secs, running,
                                 onToggleTimer = { running = !running },
-                                onResetTimer = { running = false; secs = 25 * 60 })
-                            AxiomScreen.Notes -> NotesScreen(colors)
-                            AxiomScreen.Cards -> CardsScreen(colors)
-                            AxiomScreen.Plan -> PlannerScreen(colors)
+                                onResetTimer = { running = false; secs = 25 * 60 },
+                                onToggleTask = viewModel::toggleTask,
+                                onRetry = viewModel::refresh)
+                            AxiomScreen.Notes -> NotesScreen(colors, backend, viewModel::refresh)
+                            AxiomScreen.Cards -> CardsScreen(colors, backend, viewModel::selectDeck, viewModel::refresh)
+                            AxiomScreen.Plan -> PlannerScreen(colors, backend, viewModel::toggleTask, viewModel::refresh)
+                            AxiomScreen.All -> WebWorkspaceScreen(colors)
                         }
                     }
                 }
@@ -237,7 +246,7 @@ private fun AmbientBackground(colors: AxiomColors) {
 }
 
 @Composable
-private fun StatusRow(colors: AxiomColors) {
+private fun StatusRow(colors: AxiomColors, backendConnected: Boolean) {
     val pulse = rememberInfiniteTransition(label = "pulse")
     val dotAlpha by pulse.animateFloat(
         initialValue = 1f, targetValue = 0.35f,
@@ -260,7 +269,10 @@ private fun StatusRow(colors: AxiomColors) {
                     .graphicsLayer { alpha = dotAlpha }
                     .background(colors.accent, shape = androidx.compose.foundation.shape.CircleShape)
             )
-            Text("5G", style = monoLabel(11, colors.dim, tracking = 0.1f))
+            Text(
+                if (backendConnected) "API LIVE" else "API OFFLINE",
+                style = monoLabel(11, if (backendConnected) colors.dim else Color(0xFFF87171), tracking = 0.1f),
+            )
         }
     }
 }
@@ -474,6 +486,7 @@ private fun TabItem(colors: AxiomColors, tab: AxiomScreen, selected: Boolean, on
         AxiomScreen.Notes -> IconNotes
         AxiomScreen.Cards -> IconCards
         AxiomScreen.Plan -> IconPlan
+        AxiomScreen.All -> IconAll
     }
     Column(
         modifier = Modifier

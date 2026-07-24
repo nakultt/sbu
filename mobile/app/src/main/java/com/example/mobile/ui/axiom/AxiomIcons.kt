@@ -115,3 +115,17 @@ val IconPlan: ImageVector = icon("Plan") {
         horizontalLineToRelative(3f)
     }
 }
+
+val IconAll: ImageVector = icon("All features") {
+    stroked {
+        rect(3.5f, 3.5f, 4f, 4f)
+        rect(10f, 3.5f, 4f, 4f)
+        rect(16.5f, 3.5f, 4f, 4f)
+        rect(3.5f, 10f, 4f, 4f)
+        rect(10f, 10f, 4f, 4f)
+        rect(16.5f, 10f, 4f, 4f)
+        rect(3.5f, 16.5f, 4f, 4f)
+        rect(10f, 16.5f, 4f, 4f)
+        rect(16.5f, 16.5f, 4f, 4f)
+    }
+}
