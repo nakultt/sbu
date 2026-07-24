@@ -70,6 +70,10 @@ class Settings:
     lmstudio_api_key: str
     lmstudio_model: str
     vision_model: str
+    reranker_enabled: bool
+    reranker_model: str
+    reranker_candidate_k: int
+    reranker_max_chars: int
     stt_model: str
     embed_model: str
     kokoro_voice: str
@@ -123,6 +127,17 @@ class Settings:
             lmstudio_api_key=os.getenv("LMSTUDIO_API_KEY", "lm-studio"),
             lmstudio_model=model,
             vision_model=os.getenv("VISION_MODEL", model).strip(),
+            reranker_enabled=_boolean("RERANKER_ENABLED", True),
+            reranker_model=os.getenv(
+                "RERANKER_MODEL",
+                "mlx-community/Qwen3-Reranker-0.6B-mxfp8",
+            ).strip(),
+            reranker_candidate_k=_integer(
+                "RERANKER_CANDIDATE_K", 24, maximum=100
+            ),
+            reranker_max_chars=_integer(
+                "RERANKER_MAX_CHARS", 6000, minimum=256, maximum=100_000
+            ),
             stt_model=os.getenv("STT_MODEL", "moonshine/base").strip(),
             embed_model=os.getenv(
                 "EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2"
@@ -216,6 +231,10 @@ LMSTUDIO_BASE_URL = settings.lmstudio_base_url
 LMSTUDIO_API_KEY = settings.lmstudio_api_key
 LMSTUDIO_MODEL = settings.lmstudio_model
 VISION_MODEL = settings.vision_model
+RERANKER_ENABLED = settings.reranker_enabled
+RERANKER_MODEL = settings.reranker_model
+RERANKER_CANDIDATE_K = settings.reranker_candidate_k
+RERANKER_MAX_CHARS = settings.reranker_max_chars
 STT_MODEL = settings.stt_model
 EMBED_MODEL = settings.embed_model
 KOKORO_VOICE = settings.kokoro_voice

@@ -1,5 +1,6 @@
-"""Ask My Notes: retrieve chunks from LanceDB and answer with citations."""
-from core import db, llm, vectorstore
+"""Ask My Notes: retrieve, rerank, and answer from chunks with citations."""
+from core import db, llm, reranker, vectorstore
+from core.config import RERANKER_CANDIDATE_K
 
 ANSWER_SYSTEM = (
     "You are a study assistant answering strictly from the student's own notes below. "
@@ -23,7 +24,12 @@ def _video_href(item_id: int, seconds: float) -> str:
 
 def ask(question: str, subject: str | None = None, k: int = 8) -> dict:
     llm.require_available()
-    hits = vectorstore.search(question, subject=subject, k=k)
+    candidates = vectorstore.search(
+        question,
+        subject=subject,
+        k=max(k, RERANKER_CANDIDATE_K),
+    )
+    hits = reranker.rerank(question, candidates, top_k=k)
     if not hits:
         return {"answer": "No notes found yet — ingest some material first.",
                 "sources": [], "images": [], "videos": []}

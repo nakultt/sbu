@@ -29,6 +29,24 @@ The API listens on port 8010 by default:
 - Liveness: `http://127.0.0.1:8010/api/health/live`
 - Readiness: `http://127.0.0.1:8010/api/health/ready`
 
+## RAG reranking
+
+Ask My Notes retrieves a broad LanceDB candidate set and reranks it with
+`mlx-community/Qwen3-Reranker-0.6B-mxfp8` before building the answer context.
+Download that model in LM Studio, enable the local server, and keep
+`RERANKER_ENABLED=true`. The integration uses LM Studio's OpenAI-compatible
+`/v1/chat/completions` endpoint with thinking disabled to obtain Qwen3's
+first-token yes/no relevance probabilities. If reranking is temporarily
+unavailable, the request safely retains the original vector-search order.
+
+The defaults can be adjusted in `.env`:
+
+```dotenv
+RERANKER_MODEL=mlx-community/Qwen3-Reranker-0.6B-mxfp8
+RERANKER_CANDIDATE_K=24
+RERANKER_MAX_CHARS=6000
+```
+
 Every response includes `X-Request-ID`, `X-Process-Time-Ms`, and
 `X-API-Version`. Send an existing `X-Request-ID` to correlate client and server
 logs.
