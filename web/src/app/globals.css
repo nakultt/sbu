@@ -43,6 +43,10 @@
   --panel: rgba(255, 255, 255, 0.6);
   --panel2: rgba(233, 238, 245, 0.72);
   --line: rgba(30, 60, 95, 0.14);
+  /* Foreground form of the chip-orange rose. The --chip-* tokens are already
+     ~16% transparent because they are chip *backgrounds*; strokes, text, and
+     bar fills that mark weak or at-risk states need the solid hue. */
+  --warn: #fda4af;
   --line2: rgba(30, 60, 95, 0.28);
   --text: #17222f;
   --dim: #5b6c7f;
@@ -58,6 +62,8 @@
   --font-sans: var(--font-space-grotesk);
   --font-display: var(--font-space-grotesk);
   --font-mono: var(--font-jetbrains-mono);
+  /* Same rose, deepened so it still reads as a warning against a light page. */
+  --warn: #be3455;
   /* Axiom colors */
   --color-bg: var(--bg);
   --color-panel: var(--panel);
@@ -462,3 +468,77 @@ textarea::placeholder {
     transition-duration: 0.01ms !important;
   }
 }
+/* ── Adaptive learning path ────────────────────────────────────────────
+   Chart and list motion. Everything animates transform, opacity, or
+   stroke-dashoffset only, so nothing triggers layout. Marks that draw
+   themselves carry pathLength="1", which makes one dash rule fit any path
+   length. The global prefers-reduced-motion rule below collapses all of it. */
+@keyframes chart-draw {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes node-in {
+  from { opacity: 0; transform: scale(0.82); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes reveal {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+.chart-draw {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: chart-draw 900ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+.bar-grow {
+  transform-origin: left center;
+  animation: bar-grow 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.node-in {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: node-in 380ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.reveal {
+  animation: reveal 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Rows in the gap and misconception lists: fade up on mount, tint on hover. */
+.gap-row {
+  animation: reveal 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transition: background 0.18s;
+}
+
+.gap-row:hover {
+  background: var(--panel2) !important;
+}
+
+/* Answer options. The chosen state is applied inline; this only carries hover
+   and the shake that marks a wrong answer. */
+.quiz-option {
+  transition: border-color 0.18s, background 0.18s, transform 0.18s;
+}
+
+.quiz-option:not(:disabled):hover {
+  border-color: var(--accent) !important;
+  transform: translateX(3px);
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+.quiz-wrong { animation: shake 320ms ease-in-out; }

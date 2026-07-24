@@ -197,6 +197,96 @@ CREATE TABLE IF NOT EXISTS question_paper_jobs (
     created_at REAL NOT NULL,
     finished_at REAL
 );
+
+-- ── Adaptive learning path ────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS exam_goals (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    slug TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'building',
+    error TEXT,
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS concepts (
+    id INTEGER PRIMARY KEY,
+    goal_id INTEGER NOT NULL REFERENCES exam_goals(id),
+    name TEXT NOT NULL,
+    blurb TEXT NOT NULL DEFAULT '',
+    tier INTEGER NOT NULL DEFAULT 0,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concepts_goal ON concepts(goal_id, tier, position);
+CREATE TABLE IF NOT EXISTS concept_edges (
+    prereq_id INTEGER NOT NULL REFERENCES concepts(id),
+    concept_id INTEGER NOT NULL REFERENCES concepts(id),
+    PRIMARY KEY (prereq_id, concept_id)
+);
+CREATE TABLE IF NOT EXISTS concept_sources (
+    concept_id INTEGER NOT NULL REFERENCES concepts(id),
+    chunk_id INTEGER NOT NULL REFERENCES chunks(id),
+    score REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (concept_id, chunk_id)
+);
+CREATE TABLE IF NOT EXISTS mastery (
+    concept_id INTEGER PRIMARY KEY REFERENCES concepts(id),
+    p_known REAL NOT NULL DEFAULT 0.25,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    correct INTEGER NOT NULL DEFAULT 0,
+    half_life REAL NOT NULL DEFAULT 1.0,
+    last_review_at REAL,
+    in_srs INTEGER NOT NULL DEFAULT 0,
+    updated_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mastery_history (
+    id INTEGER PRIMARY KEY,
+    concept_id INTEGER NOT NULL REFERENCES concepts(id),
+    p_known REAL NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mastery_history_concept
+    ON mastery_history(concept_id, created_at);
+CREATE TABLE IF NOT EXISTS questions (
+    id INTEGER PRIMARY KEY,
+    concept_id INTEGER NOT NULL REFERENCES concepts(id),
+    stem TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    answer_index INTEGER NOT NULL,
+    explanation TEXT NOT NULL DEFAULT '',
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_questions_concept ON questions(concept_id, id);
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY,
+    goal_id INTEGER NOT NULL REFERENCES exam_goals(id),
+    kind TEXT NOT NULL CHECK(kind IN ('diagnostic','study','review')),
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at REAL NOT NULL,
+    completed_at REAL
+);
+CREATE TABLE IF NOT EXISTS session_items (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    position INTEGER NOT NULL,
+    concept_id INTEGER NOT NULL REFERENCES concepts(id),
+    question_id INTEGER REFERENCES questions(id),
+    kind TEXT NOT NULL CHECK(kind IN ('read','quiz')),
+    done INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_session_items_session
+    ON session_items(session_id, position);
+CREATE TABLE IF NOT EXISTS attempts (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER REFERENCES sessions(id),
+    question_id INTEGER NOT NULL REFERENCES questions(id),
+    concept_id INTEGER NOT NULL REFERENCES concepts(id),
+    chosen_index INTEGER NOT NULL,
+    correct INTEGER NOT NULL,
+    misconception TEXT,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_attempts_concept ON attempts(concept_id, created_at);
 """
 
 
