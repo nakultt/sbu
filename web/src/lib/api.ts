@@ -19,6 +19,36 @@ export async function postJSON<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+export interface AskSource {
+  note_id?: number;
+  title?: string;
+  subject?: string | null;
+  [key: string]: unknown;
+}
+
+export interface AskResult {
+  answer: string;
+  sources?: AskSource[];
+  videos?: unknown[];
+  images?: unknown[];
+  transcript?: string;
+}
+
+/** Ask the local AI a text question. Backed by POST /api/ask. */
+export function askText(question: string, subject?: string): Promise<AskResult> {
+  return postJSON<AskResult>("/api/ask", { question, subject: subject || undefined });
+}
+
+/** Ask with a recorded audio blob. Backed by POST /api/ask/audio (multipart). */
+export async function askAudio(blob: Blob, subject?: string): Promise<AskResult> {
+  const form = new FormData();
+  form.append("audio", blob, "question.webm");
+  if (subject) form.append("subject", subject);
+  const res = await fetch(`${API}/api/ask/audio`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`/api/ask/audio: ${res.status}`);
+  return res.json();
+}
+
 export interface Stats {
   notes: number;
   files: number;
@@ -75,6 +105,25 @@ export interface Audiobook {
   name: string;
   created_at: number;
   size_mb: number;
+}
+
+export interface Task {
+  id: number;
+  label: string;
+  due: string | null;
+  done: number;
+  google_event_id: string | null;
+  created_at: number;
+}
+
+export interface Deck {
+  id: number;
+  title: string;
+  topic: string;
+  subject: string | null;
+  sources: unknown[];
+  card_count: number;
+  created_at: number;
 }
 
 export interface HwPage {

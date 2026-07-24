@@ -1,58 +1,80 @@
 @import "tailwindcss";
 
+/* ── Axiom design tokens ───────────────────────────────────────────────
+   Dark is the default (:root). [data-theme="light"] overrides for light.
+   Legacy token names (--page/--ink/--muted/--brand/--panel-*) are kept as
+   aliases mapped onto the Axiom palette so pages not yet rebuilt in the new
+   language stay legible during the phased reskin. --accent is set by the
+   theme provider / pre-hydration script; the default here is teal.        */
 :root {
-  --page: #f5f6fa;
-  --panel: #ffffff;
-  --panel-strong: #ffffff;
-  --panel-muted: #f0f1f6;
-  --ink: #181821;
-  --muted: #71717f;
-  --line: #e5e5ec;
-  --brand: #6557e8;
-  --brand-dark: #5144d4;
-  --brand-soft: #efedff;
-  --chip-purple: #efedff;
-  --chip-blue: #eaf4ff;
-  --chip-green: #e9f8f0;
-  --chip-orange: #fff2df;
-  --shadow-card: 0 1px 2px rgba(24, 24, 33, 0.03), 0 10px 35px rgba(24, 24, 33, 0.045);
-  --shadow-float: 0 24px 70px rgba(32, 30, 60, 0.16);
+  --accent: #5eead4;
+
+  --bg: #070b11;
+  --panel: rgba(12, 18, 27, 0.55);
+  --panel2: rgba(18, 27, 41, 0.7);
+  --line: rgba(140, 175, 215, 0.14);
+  --line2: rgba(140, 175, 215, 0.28);
+  --text: #dce7f3;
+  --dim: #677c93;
+  --faint: #3d4d60;
+  --blur: blur(16px) saturate(1.4);
+  --g2: rgba(120, 190, 255, 0.16);
+  --grid-opacity: 0.35;
+
+  /* legacy aliases → Axiom */
+  --page: var(--bg);
+  --ink: var(--text);
+  --muted: var(--dim);
+  --brand: var(--accent);
+  --brand-dark: var(--accent);
+  --brand-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --panel-strong: var(--panel2);
+  --panel-muted: var(--panel2);
+  --chip-purple: color-mix(in srgb, var(--accent) 16%, transparent);
+  --chip-blue: color-mix(in srgb, #7dd3fc 16%, transparent);
+  --chip-green: color-mix(in srgb, #5eead4 16%, transparent);
+  --chip-orange: color-mix(in srgb, #fda4af 16%, transparent);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 40px rgba(0, 0, 0, 0.35);
+  --shadow-float: 0 24px 80px rgba(0, 0, 0, 0.6);
 }
 
-[data-theme="dark"] {
-  --page: #111116;
-  --panel: #19191f;
-  --panel-strong: #202027;
-  --panel-muted: #222229;
-  --ink: #f4f3f8;
-  --muted: #a5a3af;
-  --line: #303038;
-  --brand: #9185ff;
-  --brand-dark: #a99fff;
-  --brand-soft: #2a2747;
-  --chip-purple: #2a2747;
-  --chip-blue: #1b3044;
-  --chip-green: #19372a;
-  --chip-orange: #3a2d1c;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.22), 0 16px 40px rgba(0, 0, 0, 0.14);
-  --shadow-float: 0 24px 80px rgba(0, 0, 0, 0.45);
-}
+[data-theme="light"] {
+  --bg: #eef2f7;
+  --panel: rgba(255, 255, 255, 0.6);
+  --panel2: rgba(233, 238, 245, 0.72);
+  --line: rgba(30, 60, 95, 0.14);
+  --line2: rgba(30, 60, 95, 0.28);
+  --text: #17222f;
+  --dim: #5b6c7f;
+  --faint: #9fb0c2;
+  --blur: blur(16px) saturate(1.3);
+  --g2: rgba(90, 150, 230, 0.14);
 
-.theme-dark-icon { display: none; }
-[data-theme="dark"] .theme-light-icon { display: none; }
-[data-theme="dark"] .theme-dark-icon { display: block; }
+  --shadow-card: 0 1px 2px rgba(24, 24, 33, 0.05), 0 10px 35px rgba(24, 24, 33, 0.08);
+  --shadow-float: 0 24px 70px rgba(32, 30, 60, 0.18);
+}
 
 @theme inline {
-  --font-sans: var(--font-manrope);
+  --font-sans: var(--font-space-grotesk);
   --font-display: var(--font-space-grotesk);
+  --font-mono: var(--font-jetbrains-mono);
+  /* Axiom colors */
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-panel2: var(--panel2);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-text: var(--text);
+  --color-dim: var(--dim);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  /* legacy aliases */
   --color-brand: var(--brand);
   --color-brand-dark: var(--brand-dark);
   --color-brand-soft: var(--brand-soft);
   --color-ink: var(--ink);
   --color-muted: var(--muted);
-  --color-line: var(--line);
   --color-page: var(--page);
-  --color-panel: var(--panel);
   --color-panel-strong: var(--panel-strong);
   --color-panel-muted: var(--panel-muted);
   --color-chip-purple: var(--chip-purple);
@@ -66,18 +88,28 @@
 }
 
 html {
-  background: var(--page);
+  background: var(--bg);
   scroll-behavior: smooth;
 }
 
 body {
   min-width: 320px;
-  background:
-    radial-gradient(circle at 82% -10%, color-mix(in srgb, var(--brand) 9%, transparent), transparent 32rem),
-    var(--page);
-  color: var(--ink);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-space-grotesk), sans-serif;
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   text-rendering: optimizeLegibility;
+}
+
+a { color: var(--accent); }
+a:hover { color: #99f6e4; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes screenIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes blobDrift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(40px, -30px); } }
+.axscreen { animation: screenIn 0.4s cubic-bezier(0.2, 0.7, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .axscreen, [data-blob] { animation: none !important; }
 }
 
 h1,
@@ -133,15 +165,17 @@ textarea::placeholder {
 }
 
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--muted) 32%, transparent);
-  background-clip: padding-box;
+  border-radius: 4px;
+  background: var(--line2);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 @layer components {

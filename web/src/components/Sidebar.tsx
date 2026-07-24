@@ -2,147 +2,233 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  ArrowUpRight, BookOpenText, CalendarDays, CheckSquare, FilePlus2, FileText,
-  FolderOpen, HardDrive, Headphones, Layers, PenLine, Search, Settings, Sparkles,
-  Video, X,
-} from "lucide-react";
+import { X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useState } from "react";
-import { getJSON, Stats } from "@/lib/api";
+import { useTheme } from "@/components/ThemeProvider";
+import MonoLabel from "@/components/ui/MonoLabel";
 
-const GROUPS = [
+const GROUPS: { label: string; items: { href: string; label: string }[] }[] = [
   {
     label: "Workspace",
     items: [
-      { href: "/", label: "Overview", icon: Sparkles },
-      { href: "/notes", label: "Notes", icon: FileText },
-      { href: "/files", label: "Library", icon: FolderOpen },
-      { href: "/search", label: "Ask my notes", icon: Search },
+      { href: "/", label: "Overview" },
+      { href: "/notes", label: "Notes" },
+      { href: "/files", label: "Library" },
+      { href: "/search", label: "Ask my notes" },
     ],
   },
   {
     label: "Learn",
     items: [
-      { href: "/tasks", label: "Tasks", icon: CheckSquare },
-      { href: "/calendar", label: "Calendar", icon: CalendarDays },
-      { href: "/flashcards", label: "Flashcards", icon: Layers },
-      { href: "/audiobooks", label: "Audiobooks", icon: Headphones },
-      { href: "/handwriting", label: "Handwriting", icon: PenLine },
-      { href: "/video", label: "Video review", icon: Video },
+      { href: "/tasks", label: "Tasks" },
+      { href: "/calendar", label: "Calendar" },
+      { href: "/flashcards", label: "Flashcards" },
+      { href: "/audiobooks", label: "Audiobooks" },
+      { href: "/handwriting", label: "Handwriting" },
+      { href: "/video", label: "Video review" },
     ],
   },
 ];
 
-function Navigation({ stats, onNavigate }: { stats: Stats | null; onNavigate?: () => void }) {
+function isActive(pathname: string, href: string): boolean {
+  return pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
+}
+
+function NavRow({
+  num,
+  label,
+  href,
+  active,
+  onNavigate,
+}: {
+  num: string;
+  label: string;
+  href: string;
+  active: boolean;
+  onNavigate?: () => void;
+}) {
+  return (
+    <Link
+      href={href}
+      onClick={onNavigate}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "11px 12px",
+        borderLeft: `2px solid ${active ? "var(--accent)" : "transparent"}`,
+        background: active ? "var(--panel2)" : "transparent",
+        color: active ? "var(--text)" : "var(--dim)",
+      }}
+    >
+      <span
+        style={{
+          fontFamily: "var(--font-jetbrains-mono), monospace",
+          fontSize: 10,
+          letterSpacing: "0.1em",
+          color: active ? "var(--accent)" : "var(--faint)",
+        }}
+      >
+        {num}
+      </span>
+      <span style={{ fontSize: 14, letterSpacing: "0.06em" }}>{label}</span>
+    </Link>
+  );
+}
+
+// Flatten groups into a single 01..NN numbering computed before render.
+const NUMBERED = (() => {
+  let n = 0;
+  return GROUPS.map((group) => ({
+    label: group.label,
+    items: group.items.map((item) => {
+      n += 1;
+      return { ...item, num: String(n).padStart(2, "0") };
+    }),
+  }));
+})();
+
+function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
-  const pct = stats?.disk_total_gb
-    ? Math.min(Math.round((stats.disk_used_gb / stats.disk_total_gb) * 100), 100)
-    : 0;
+  const { theme, toggleTheme } = useTheme();
 
   return (
     <>
-      <div className="flex h-[82px] items-center gap-3 px-5">
-        <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-[#8b7cff] via-[#715cff] to-[#b55cff] text-white shadow-[0_10px_28px_rgba(113,92,255,0.38)]">
-          <BookOpenText className="h-5 w-5" strokeWidth={2.2} />
-          <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-white/80" />
-        </div>
-        <div className="min-w-0">
-          <div className="font-display truncate text-[16px] font-bold tracking-[-0.035em] text-white">Study Buddy</div>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-white/38">Learning OS</div>
-        </div>
-      </div>
-
-      <div className="px-3 pb-3">
-        <Link
-          href="/files"
-          onClick={onNavigate}
-          className="group flex items-center gap-3 rounded-2xl bg-white px-3.5 py-3 text-[13px] font-extrabold text-[#17171f] shadow-[0_10px_28px_rgba(0,0,0,0.2)] hover:-translate-y-0.5 hover:bg-[#f5f2ff]"
+      {/* Wordmark */}
+      <div
+        style={{
+          padding: "26px 22px 22px",
+          borderBottom: "1px solid var(--line)",
+          display: "flex",
+          alignItems: "center",
+          gap: 11,
+        }}
+      >
+        <div
+          style={{
+            width: 30,
+            height: 30,
+            border: "1px solid var(--accent)",
+            display: "grid",
+            placeItems: "center",
+            fontFamily: "var(--font-jetbrains-mono), monospace",
+            fontSize: 13,
+            color: "var(--accent)",
+            boxShadow: "0 0 18px -6px var(--accent)",
+          }}
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#ece8ff] text-[#6557e8]"><FilePlus2 className="h-4 w-4" /></span>
-          <span className="flex-1">New capture</span>
-          <ArrowUpRight className="h-4 w-4 text-black/35 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
-        </Link>
+          A
+        </div>
+        <div>
+          <div style={{ fontWeight: 600, letterSpacing: "0.14em", fontSize: 15 }}>AXIOM</div>
+          <MonoLabel size={9} spacing="0.22em">STUDY SYSTEM</MonoLabel>
+        </div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-4 pt-1">
-        {GROUPS.map((group, groupIndex) => (
-          <div key={group.label} className={groupIndex ? "mt-6" : ""}>
-            <p className="mb-2 px-3 text-[9px] font-extrabold uppercase tracking-[0.18em] text-white/28">{group.label}</p>
-            <div className="space-y-1">
-              {group.items.map(({ href, label, icon: Icon }) => {
-                const active = pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
-                return (
-                  <Link
-                    key={href}
-                    href={href}
-                    onClick={onNavigate}
-                    className={`group relative flex items-center gap-3 overflow-hidden rounded-xl px-3 py-2.5 text-[13px] font-bold ${
-                      active ? "text-white" : "text-white/52 hover:bg-white/[0.06] hover:text-white"
-                    }`}
-                  >
-                    {active && (
-                      <motion.span
-                        layoutId="active-navigation"
-                        className="absolute inset-0 rounded-xl bg-gradient-to-r from-[#6e5cf1] to-[#775bdf] shadow-[0_8px_22px_rgba(92,72,210,0.25)]"
-                        transition={{ type: "spring", stiffness: 450, damping: 38 }}
-                      />
-                    )}
-                    <Icon className="relative z-10 h-[17px] w-[17px] shrink-0" strokeWidth={active ? 2.2 : 1.8} />
-                    <span className="relative z-10">{label}</span>
-                  </Link>
-                );
-              })}
+      {/* Nav */}
+      <div style={{ padding: "18px 12px", display: "flex", flexDirection: "column", gap: 14, flex: 1, overflowY: "auto" }}>
+        {NUMBERED.map((group) => (
+          <div key={group.label} style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div style={{ padding: "0 12px 6px" }}>
+              <MonoLabel size={9} spacing="0.18em" dim>{group.label}</MonoLabel>
             </div>
+            {group.items.map((item) => (
+              <NavRow
+                key={item.href}
+                num={item.num}
+                label={item.label}
+                href={item.href}
+                active={isActive(pathname, item.href)}
+                onNavigate={onNavigate}
+              />
+            ))}
           </div>
         ))}
-      </nav>
+      </div>
 
-      <div className="space-y-2 border-t border-white/[0.07] p-3">
-        <div className="rounded-2xl border border-white/[0.06] bg-white/[0.04] p-3.5">
-          <div className="flex items-center justify-between text-xs">
-            <span className="flex items-center gap-2 font-bold text-white/74">
-              <HardDrive className="h-3.5 w-3.5 text-white/35" /> Local storage
-            </span>
-            <span className="font-bold text-white/38">{stats ? `${stats.disk_used_gb} GB` : "—"}</span>
-          </div>
-          <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10">
-            <motion.div
-              className="h-full rounded-full bg-gradient-to-r from-[#7665f5] to-[#aa65ed]"
-              initial={{ width: 0 }}
-              animate={{ width: `${pct}%` }}
-              transition={{ duration: 0.7, ease: [0.2, 0.8, 0.2, 1] }}
-            />
-          </div>
-          <p className="mt-2 text-[10px] font-medium leading-4 text-white/32">
-            {stats ? `${pct}% of ${Math.round(stats.disk_total_gb)} GB used` : "Checking this device…"}
-          </p>
-        </div>
-        <Link
+      {/* Footer: settings, theme toggle, user chip */}
+      <div style={{ padding: "16px 18px", borderTop: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 14 }}>
+        <NavRow
+          num="11"
+          label="Settings"
           href="/settings"
-          onClick={onNavigate}
-          className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-bold ${
-            pathname === "/settings" ? "bg-white/10 text-white" : "text-white/48 hover:bg-white/[0.06] hover:text-white"
-          }`}
-        >
-          <Settings className="h-[17px] w-[17px]" /> Settings
-        </Link>
+          active={isActive(pathname, "/settings")}
+          onNavigate={onNavigate}
+        />
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 12px" }}>
+          <MonoLabel size={10} spacing="0.18em">{theme === "dark" ? "DARK MODE" : "LIGHT MODE"}</MonoLabel>
+          <button
+            type="button"
+            aria-label="Toggle theme"
+            onClick={toggleTheme}
+            style={{
+              width: 38,
+              height: 20,
+              border: "1px solid var(--line2)",
+              borderRadius: 20,
+              position: "relative",
+              background: "transparent",
+              cursor: "pointer",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 2,
+                left: theme === "dark" ? 2 : 20,
+                width: 14,
+                height: 14,
+                borderRadius: "50%",
+                background: "var(--accent)",
+                transition: "left 0.25s",
+                boxShadow: "0 0 10px -2px var(--accent)",
+              }}
+            />
+          </button>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 12px" }}>
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              border: "1px solid var(--line2)",
+              display: "grid",
+              placeItems: "center",
+              fontFamily: "var(--font-jetbrains-mono), monospace",
+              fontSize: 10,
+              color: "var(--dim)",
+            }}
+          >
+            SB
+          </div>
+          <div style={{ fontSize: 12, color: "var(--dim)" }}>Study Buddy</div>
+        </div>
       </div>
     </>
   );
 }
 
 export default function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [stats, setStats] = useState<Stats | null>(null);
-
-  useEffect(() => {
-    getJSON<Stats>("/api/stats").then(setStats).catch(() => {});
-  }, []);
-
   return (
     <>
-      <aside className="sticky top-3 ml-3 hidden h-[calc(100dvh-24px)] w-[258px] shrink-0 flex-col overflow-hidden rounded-[26px] border border-white/[0.07] bg-[#17171f] shadow-[0_20px_60px_rgba(24,22,42,0.18)] xl:flex">
-        <Navigation stats={stats} />
+      <aside
+        className="hidden xl:flex"
+        style={{
+          width: 224,
+          flexShrink: 0,
+          flexDirection: "column",
+          borderRight: "1px solid var(--line)",
+          background: "var(--panel)",
+          backdropFilter: "var(--blur)",
+          WebkitBackdropFilter: "var(--blur)",
+          position: "sticky",
+          top: 0,
+          height: "100dvh",
+          zIndex: 2,
+        }}
+      >
+        <Navigation />
       </aside>
 
       <AnimatePresence>
@@ -151,23 +237,36 @@ export default function Sidebar({ open, onClose }: { open: boolean; onClose: () 
             <motion.button
               type="button"
               aria-label="Close navigation"
-              className="fixed inset-0 z-40 bg-ink/35 backdrop-blur-[2px] xl:hidden"
+              className="fixed inset-0 z-40 xl:hidden"
+              style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(2px)" }}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={onClose}
             />
             <motion.aside
-              className="fixed inset-y-0 left-0 z-50 flex w-[min(86vw,292px)] flex-col bg-[#17171f] shadow-[var(--shadow-float)] xl:hidden"
+              className="fixed inset-y-0 left-0 z-50 flex flex-col xl:hidden"
+              style={{
+                width: "min(86vw, 292px)",
+                background: "var(--panel)",
+                backdropFilter: "var(--blur)",
+                WebkitBackdropFilter: "var(--blur)",
+                borderRight: "1px solid var(--line)",
+              }}
               initial={{ x: "-100%" }}
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
               transition={{ type: "spring", stiffness: 380, damping: 38 }}
             >
-              <button onClick={onClose} className="absolute right-3 top-4 rounded-xl p-2 text-white/45 hover:bg-white/10 hover:text-white" aria-label="Close navigation">
+              <button
+                onClick={onClose}
+                className="absolute right-3 top-4 z-10 p-2"
+                style={{ color: "var(--dim)" }}
+                aria-label="Close navigation"
+              >
                 <X className="h-5 w-5" />
               </button>
-              <Navigation stats={stats} onNavigate={onClose} />
+              <Navigation onNavigate={onClose} />
             </motion.aside>
           </>
         )}
