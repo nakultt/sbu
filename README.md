@@ -227,7 +227,7 @@ The FastAPI backend (`server.py`) exposes the following primary endpoints:
 ## 📁 Repository Structure
 
 ```
-kec-feature/
+sbu-main/
 ├── server.py              # FastAPI application server & API endpoints
 ├── app.py                 # Streamlit homepage (Alternative Python UI)
 ├── requirements.txt       # Python dependencies manifest
@@ -250,16 +250,9 @@ kec-feature/
 ├── architecture_pipeline.png  # System architecture & RAG pipeline diagram
 ├── offline_sync_flow.png      # Offline-first sync workflow diagram
 ├── web/                   # Next.js 15 web application dashboard
-│   ├── src/
-│   │   ├── app/           # Next.js App Router pages (Notes, Files, Ask, etc.)
-│   │   └── components/    # UI component library
-│   └── package.json
-└── scripts/
-    └── smoke.py           # Verification smoke test script
+    ├── src/
+    │   ├── app/           # Next.js App Router pages (Notes, Files, Ask, etc.)
+    │   └── components/    # UI component library
+    └── package.json
 ```
 
----
-
-## 🛡️ License & Contributing
-
-Built for local personal knowledge management and privacy-preserving study automation. Contributions, feature requests, and bug reports are welcome!
