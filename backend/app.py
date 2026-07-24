@@ -4,7 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from core import db, llm, rag
+from core import db, flashcards, llm, rag
 from core.config import INBOX_DIR
 from core.ingest import start_worker
 
@@ -81,14 +81,23 @@ with tab_ask:
         st.chat_message("user").markdown(question)
         st.session_state.chat.append(("user", question))
         with st.chat_message("assistant"):
-            with st.spinner("Searching your notes…"):
-                result = rag.ask(question, None if subject == "All subjects" else subject)
+            with st.spinner("Working on your request…"):
+                selected_subject = None if subject == "All subjects" else subject
+                result = flashcards.maybe_create_from_chat(question, selected_subject)
+                if result is None:
+                    result = rag.ask(question, selected_subject)
             st.markdown(result["answer"])
             if result["sources"]:
-                st.caption("Sources: " + " · ".join(result["sources"]))
+                st.caption("Sources: " + " · ".join(s["label"] for s in result["sources"]))
             for img in result["images"]:
                 if Path(img).exists():
                     st.image(img, width=400)
+            if result.get("deck_id"):
+                deck = db.get_flashcard_deck(result["deck_id"])
+                if deck:
+                    with st.expander("Preview the new deck", expanded=True):
+                        for card in deck["cards"]:
+                            st.markdown(f"**{card['front']}**  \n{card['back']}")
         st.session_state.chat.append(("assistant", result["answer"]))
 
 with tab_audio:

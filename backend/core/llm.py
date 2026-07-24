@@ -9,16 +9,31 @@ from core.config import LMSTUDIO_API_KEY, LMSTUDIO_BASE_URL, LMSTUDIO_MODEL, VIS
 _client = OpenAI(base_url=LMSTUDIO_BASE_URL, api_key=LMSTUDIO_API_KEY)
 
 
+class LocalLLMUnavailable(RuntimeError):
+    """The only configured LLM endpoint is unavailable or missing its model."""
+
+
 def is_available() -> bool:
     try:
-        _client.models.list()
-        return True
+        models = _client.with_options(timeout=2.0, max_retries=0).models.list()
+        available = {model.id for model in models.data}
+        return LMSTUDIO_MODEL in available and VISION_MODEL in available
     except Exception:
         return False
 
 
+def require_available() -> None:
+    """Fail closed: this application never substitutes a remote or heuristic LLM."""
+    if not is_available():
+        raise LocalLLMUnavailable(
+            f"Local-network LM Studio is unavailable, or does not serve {LMSTUDIO_MODEL!r} "
+            f"and {VISION_MODEL!r}, at {LMSTUDIO_BASE_URL}."
+        )
+
+
 def chat(system: str, user: str, temperature: float = 0.3, max_tokens: int = 2048) -> str:
-    resp = _client.chat.completions.create(
+    require_available()
+    resp = _client.with_options(timeout=60.0, max_retries=0).chat.completions.create(
         model=LMSTUDIO_MODEL,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=temperature,
@@ -32,13 +47,14 @@ def chat(system: str, user: str, temperature: float = 0.3, max_tokens: int = 204
 def chat_vision(prompt: str, images_b64: list[str], temperature: float = 0.0,
                 max_tokens: int = 256, model: str | None = None) -> str:
     """Send a text prompt plus one or more base64 PNG images to the vision model."""
+    require_available()
     content: list = [{"type": "text", "text": prompt}]
     for b64 in images_b64:
         content.append({
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{b64}"},
         })
-    resp = _client.chat.completions.create(
+    resp = _client.with_options(timeout=90.0, max_retries=0).chat.completions.create(
         model=model or VISION_MODEL,
         messages=[{"role": "user", "content": content}],
         temperature=temperature,

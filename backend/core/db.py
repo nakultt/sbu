@@ -1,7 +1,9 @@
 """SQLite metadata store: items, subjects, notes, chunks."""
 import sqlite3
 import time
+import json
 from contextlib import contextmanager
+from pathlib import Path
 
 from core.config import DB_PATH
 
@@ -20,6 +22,8 @@ CREATE TABLE IF NOT EXISTS items (
     error TEXT,
     title TEXT,
     subject_id INTEGER REFERENCES subjects(id),
+    metadata_text TEXT,
+    capture_date TEXT,
     created_at REAL NOT NULL,
     processed_at REAL
 );
@@ -42,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     label TEXT NOT NULL,
     due TEXT,
     done INTEGER NOT NULL DEFAULT 0,
+    google_event_id TEXT,
     created_at REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS hw_pages (
@@ -97,6 +102,48 @@ CREATE TABLE IF NOT EXISTS video_ocr_segments (
     created_at REAL NOT NULL,
     UNIQUE(frame_id, segment_index)
 );
+CREATE TABLE IF NOT EXISTS calendar_reminders (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    title TEXT NOT NULL,
+    event_date TEXT NOT NULL,
+    start_time TEXT,
+    end_time TEXT,
+    all_day INTEGER NOT NULL DEFAULT 1,
+    description TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed',
+    google_event_id TEXT,
+    error TEXT,
+    created_at REAL NOT NULL,
+    UNIQUE(item_id, title, event_date, start_time)
+);
+CREATE TABLE IF NOT EXISTS chat_turns (
+    id INTEGER PRIMARY KEY,
+    role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+    content TEXT NOT NULL,
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    videos_json TEXT NOT NULL DEFAULT '[]',
+    images_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS flashcard_decks (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    topic TEXT NOT NULL,
+    subject TEXT,
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS flashcards (
+    id INTEGER PRIMARY KEY,
+    deck_id INTEGER NOT NULL REFERENCES flashcard_decks(id),
+    front TEXT NOT NULL,
+    back TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_flashcards_deck_position
+    ON flashcards(deck_id, position);
 """
 
 
@@ -118,15 +165,41 @@ def init_db():
             c.execute("ALTER TABLE hw_pages ADD COLUMN item_id INTEGER REFERENCES items(id)")
         except sqlite3.OperationalError:
             pass
+        columns = {row["name"] for row in c.execute("PRAGMA table_info(items)").fetchall()}
+        if "metadata_text" not in columns:
+            c.execute("ALTER TABLE items ADD COLUMN metadata_text TEXT")
+        if "capture_date" not in columns:
+            c.execute("ALTER TABLE items ADD COLUMN capture_date TEXT")
+        task_columns = {row["name"] for row in c.execute("PRAGMA table_info(tasks)").fetchall()}
+        if "google_event_id" not in task_columns:
+            c.execute("ALTER TABLE tasks ADD COLUMN google_event_id TEXT")
+        # Chat turns gained media so "Play from timestamp" / image results survive reloads.
+        chat_columns = {row["name"] for row in c.execute("PRAGMA table_info(chat_turns)").fetchall()}
+        if "videos_json" not in chat_columns:
+            c.execute("ALTER TABLE chat_turns ADD COLUMN videos_json TEXT NOT NULL DEFAULT '[]'")
+        if "images_json" not in chat_columns:
+            c.execute("ALTER TABLE chat_turns ADD COLUMN images_json TEXT NOT NULL DEFAULT '[]'")
+        # Older versions queued extracted events automatically. Make any
+        # unsynced legacy entries explicitly reviewable instead.
+        c.execute("UPDATE calendar_reminders SET status='proposed' WHERE status='pending'")
 
 
-def add_item(filename: str, stored_path: str, kind: str) -> int:
+def add_item(filename: str, stored_path: str, kind: str,
+             metadata_text: str | None = None, capture_date: str | None = None) -> int:
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO items (filename, stored_path, kind, created_at) VALUES (?,?,?,?)",
-            (filename, stored_path, kind, time.time()),
+            "INSERT INTO items "
+            "(filename, stored_path, kind, metadata_text, capture_date, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (filename, stored_path, kind, metadata_text, capture_date, time.time()),
         )
         return cur.lastrowid
+
+
+def get_item(item_id: int):
+    with conn() as c:
+        row = c.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+        return dict(row) if row else None
 
 
 def set_status(item_id: int, status: str, error: str | None = None):
@@ -175,6 +248,25 @@ def next_pending_item():
             "SELECT * FROM items WHERE status='pending' ORDER BY created_at LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
+
+
+def claim_next_pending_item():
+    """Atomically claim one queue item across bot/server worker processes."""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        row = c.execute(
+            "SELECT * FROM items WHERE status='pending' ORDER BY created_at LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        c.execute(
+            "UPDATE items SET status='processing', error=NULL, processed_at=NULL "
+            "WHERE id=? AND status='pending'",
+            (row["id"],),
+        )
+        claimed = dict(row)
+        claimed["status"] = "processing"
+        return claimed
 
 
 def add_note(item_id: int, markdown: str) -> int:
@@ -382,7 +474,202 @@ def list_video_segments(frame_id: int):
                                             "ORDER BY segment_index", (frame_id,)).fetchall()]
 
 
-def set_video_frame_review(frame_id: int, text: str, markdown: str):
+def set_video_frame_review(frame_id: int, text: str, markdown: str, reviewed: bool = True):
     with conn() as c:
-        c.execute("UPDATE video_frames SET status='reviewed', consolidated_text=?, formatted_markdown=?, "
-                  "reviewed_at=? WHERE id=?", (text, markdown, time.time(), frame_id))
+        c.execute("UPDATE video_frames SET status=?, consolidated_text=?, formatted_markdown=?, "
+                  "reviewed_at=? WHERE id=?", ("reviewed" if reviewed else "auto_processed", text,
+                                                markdown, time.time() if reviewed else None, frame_id))
+
+
+def delete_video_frame(frame_id: int) -> bool:
+    """Remove a recommended frame plus its OCR segments and their image files."""
+    with conn() as c:
+        frame = c.execute("SELECT frame_path FROM video_frames WHERE id=?", (frame_id,)).fetchone()
+        if frame is None:
+            return False
+        crops = [r["crop_path"] for r in c.execute(
+            "SELECT crop_path FROM video_ocr_segments WHERE frame_id=?", (frame_id,)).fetchall()]
+        c.execute("DELETE FROM video_ocr_segments WHERE frame_id=?", (frame_id,))
+        c.execute("DELETE FROM video_frames WHERE id=?", (frame_id,))
+    for path in [frame["frame_path"], *crops]:
+        try:
+            if path:
+                Path(path).unlink(missing_ok=True)
+        except OSError:
+            pass
+    return True
+
+
+def add_calendar_reminder(item_id: int, title: str, event_date: str,
+                          start_time: str | None, end_time: str | None,
+                          description: str | None) -> int | None:
+    with conn() as c:
+        cur = c.execute(
+            "INSERT OR IGNORE INTO calendar_reminders "
+            "(item_id, title, event_date, start_time, end_time, all_day, description, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (item_id, title, event_date, start_time, end_time, int(not start_time),
+            description, time.time()),
+        )
+        return cur.lastrowid or None
+
+
+def set_task_google_event(task_id: int, google_event_id: str):
+    with conn() as c:
+        c.execute("UPDATE tasks SET google_event_id=? WHERE id=?", (google_event_id, task_id))
+
+
+def list_pending_calendar_reminders():
+    with conn() as c:
+        return [dict(row) for row in c.execute(
+            "SELECT calendar_reminders.*, items.filename FROM calendar_reminders "
+            "JOIN items ON items.id = calendar_reminders.item_id "
+            "WHERE calendar_reminders.status IN ('approved','error') "
+            "ORDER BY calendar_reminders.event_date, calendar_reminders.start_time"
+        ).fetchall()]
+
+
+def list_calendar_proposals():
+    with conn() as c:
+        return [dict(row) for row in c.execute(
+            "SELECT calendar_reminders.*, items.filename FROM calendar_reminders "
+            "JOIN items ON items.id = calendar_reminders.item_id "
+            "WHERE calendar_reminders.status='proposed' "
+            "ORDER BY calendar_reminders.event_date, calendar_reminders.start_time"
+        ).fetchall()]
+
+
+def set_calendar_reminder_status(reminder_id: int, status: str):
+    with conn() as c:
+        c.execute(
+            "UPDATE calendar_reminders SET status=?, error=NULL WHERE id=?",
+            (status, reminder_id),
+        )
+
+
+def calendar_reminder_counts():
+    with conn() as c:
+        rows = c.execute(
+            "SELECT status, COUNT(*) AS count FROM calendar_reminders GROUP BY status"
+        ).fetchall()
+    return {row["status"]: row["count"] for row in rows}
+
+
+def set_calendar_reminder_result(reminder_id: int, google_event_id: str | None,
+                                 error: str | None = None):
+    with conn() as c:
+        c.execute(
+            "UPDATE calendar_reminders SET status=?, google_event_id=?, error=? WHERE id=?",
+            ("error" if error else "created", google_event_id, error, reminder_id),
+        )
+
+
+def add_chat_turn(role: str, content: str, sources: list[dict] | None = None,
+                  videos: list[dict] | None = None,
+                  images: list[dict] | None = None) -> int:
+    with conn() as c:
+        return c.execute(
+            "INSERT INTO chat_turns (role, content, sources_json, videos_json, images_json, created_at) "
+            "VALUES (?,?,?,?,?,?)",
+            (role, content, json.dumps(sources or [], ensure_ascii=False),
+             json.dumps(videos or [], ensure_ascii=False),
+             json.dumps(images or [], ensure_ascii=False), time.time()),
+        ).lastrowid
+
+
+def list_chat_turns(limit: int = 200):
+    with conn() as c:
+        rows = c.execute(
+            "SELECT * FROM (SELECT * FROM chat_turns ORDER BY id DESC LIMIT ?) "
+            "ORDER BY id", (limit,),
+        ).fetchall()
+    return [{
+        "id": row["id"], "role": row["role"], "content": row["content"],
+        "sources": json.loads(row["sources_json"]),
+        "videos": json.loads(row["videos_json"]),
+        "images": json.loads(row["images_json"]),
+        "created_at": row["created_at"],
+    } for row in rows]
+
+
+def clear_chat_turns():
+    with conn() as c:
+        c.execute("DELETE FROM chat_turns")
+
+
+def create_flashcard_deck(title: str, topic: str, cards: list[dict],
+                          subject: str | None = None,
+                          sources: list[dict] | None = None) -> int:
+    """Save a complete deck in one transaction."""
+    now = time.time()
+    with conn() as c:
+        deck_id = c.execute(
+            "INSERT INTO flashcard_decks "
+            "(title, topic, subject, sources_json, created_at) VALUES (?,?,?,?,?)",
+            (title, topic, subject, json.dumps(sources or [], ensure_ascii=False), now),
+        ).lastrowid
+        c.executemany(
+            "INSERT INTO flashcards (deck_id, front, back, position, created_at) "
+            "VALUES (?,?,?,?,?)",
+            [
+                (deck_id, card["front"], card["back"], position, now)
+                for position, card in enumerate(cards)
+            ],
+        )
+    return deck_id
+
+
+def list_flashcard_decks():
+    with conn() as c:
+        rows = c.execute(
+            "SELECT flashcard_decks.*, COUNT(flashcards.id) AS card_count "
+            "FROM flashcard_decks LEFT JOIN flashcards "
+            "ON flashcards.deck_id=flashcard_decks.id "
+            "GROUP BY flashcard_decks.id ORDER BY flashcard_decks.created_at DESC"
+        ).fetchall()
+    decks = []
+    for row in rows:
+        deck = dict(row)
+        deck["sources"] = json.loads(deck.pop("sources_json"))
+        decks.append(deck)
+    return decks
+
+
+def get_flashcard_deck(deck_id: int):
+    with conn() as c:
+        deck = c.execute(
+            "SELECT * FROM flashcard_decks WHERE id=?", (deck_id,)
+        ).fetchone()
+        if deck is None:
+            return None
+        cards = c.execute(
+            "SELECT id, front, back, position FROM flashcards "
+            "WHERE deck_id=? ORDER BY position", (deck_id,)
+        ).fetchall()
+    result = dict(deck)
+    result["sources"] = json.loads(result.pop("sources_json"))
+    result["cards"] = [dict(card) for card in cards]
+    result["card_count"] = len(cards)
+    return result
+
+
+def delete_flashcard_deck(deck_id: int) -> bool:
+    with conn() as c:
+        c.execute("DELETE FROM flashcards WHERE deck_id=?", (deck_id,))
+        deleted = c.execute(
+            "DELETE FROM flashcard_decks WHERE id=?", (deck_id,)
+        ).rowcount
+    return bool(deleted)
+
+
+def flashcard_count() -> int:
+    with conn() as c:
+        return c.execute("SELECT COUNT(*) FROM flashcards").fetchone()[0]
+
+
+def note_id_for_item(item_id: int) -> int | None:
+    with conn() as c:
+        row = c.execute(
+            "SELECT id FROM notes WHERE item_id=? ORDER BY created_at DESC LIMIT 1", (item_id,)
+        ).fetchone()
+    return row["id"] if row else None

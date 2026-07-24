@@ -1,5 +1,8 @@
 """Speech-to-text: Silero VAD segmentation + Moonshine ONNX transcription."""
 from functools import lru_cache
+import subprocess
+import tempfile
+from pathlib import Path
 
 import numpy as np
 import soundfile as sf
@@ -62,3 +65,20 @@ def transcribe(wav_path: str) -> list[dict]:
         if text:
             results.append({"start": round(start, 2), "end": round(end, 2), "text": text})
     return results
+
+
+def transcribe_media(media_path: str) -> list[dict]:
+    """Convert browser/media audio to 16 kHz mono WAV, then transcribe it."""
+    wav_path = Path(tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name)
+    try:
+        subprocess.run(
+            [
+                "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                "-i", media_path, "-ac", "1", "-ar", str(SAMPLE_RATE), "-vn", str(wav_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return transcribe(str(wav_path))
+    finally:
+        wav_path.unlink(missing_ok=True)

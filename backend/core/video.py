@@ -152,8 +152,8 @@ def run_segment_ocr(segment: dict) -> dict:
     return segment
 
 
-def consolidate_frame(frame_id: int) -> dict:
-    """Reconcile progressive OCR against the complete reviewed image."""
+def consolidate_frame(frame_id: int, reviewed: bool = True) -> dict:
+    """Reconcile crop OCR against the complete image."""
     frame = db.get_video_frame(frame_id)
     if not frame:
         raise ValueError("frame not found")
@@ -162,10 +162,33 @@ def consolidate_frame(frame_id: int) -> dict:
                        (f"\nDetected table:\n{s['table_markdown']}" if s["table_markdown"] else "")
                        for s in segments if s["raw_text"] or s["table_markdown"])
     image = base64.b64encode(Path(frame["frame_path"]).read_bytes()).decode()
-    prompt = ("This verified lecture-board image is the authority. Reconcile the supplied OCR against the COMPLETE image. "
+    authority = "verified lecture-board" if reviewed else "candidate lecture"
+    prompt = (f"This {authority} image is the authority. Reconcile the supplied OCR against the COMPLETE image. "
               "Correct only text or table cells that visibly disagree; do not invent content. Return polished Markdown with "
-              "a concise title, notes, and Markdown tables when visible. Output only Markdown.\n\nOCR to reconcile:\n" +
+              "a concise title, notes, and Markdown tables when visible. Preserve formulas and explain visible diagrams briefly. "
+              "If there is no educational writing, diagram, table, or slide, return exactly NO_RELEVANT_CONTENT. "
+              "Output only Markdown.\n\nOCR to reconcile:\n" +
               (raw or "(No legible OCR.)"))
     markdown = llm.chat_vision(prompt, [image], max_tokens=1800)
-    db.set_video_frame_review(frame_id, raw, markdown)
+    # Some local vision models append the sentinel after a useful answer even
+    # when instructed to return it alone. Preserve useful analysis, but never
+    # leak the control token into notes or RAG.
+    markdown = "\n".join(
+        line for line in markdown.splitlines()
+        if line.strip() != "NO_RELEVANT_CONTENT"
+    ).strip() or "NO_RELEVANT_CONTENT"
+    db.set_video_frame_review(frame_id, raw, markdown, reviewed=reviewed)
     return {"frame": db.get_video_frame(frame_id), "markdown": markdown}
+
+
+def analyze_frame(frame_id: int) -> dict:
+    """Run every small OCR segment, then one full-image reconciliation."""
+    segments = prepare_segments(frame_id)
+    for segment in segments:
+        if segment["status"] != "done":
+            try:
+                run_segment_ocr(segment)
+            except Exception:
+                # Vision reconciliation can still understand diagrams without OCR.
+                db.set_video_segment_result(segment["id"], "", None)
+    return consolidate_frame(frame_id, reviewed=False)

@@ -4,11 +4,13 @@ Flow per item: extract text (STT/OCR/PDF) -> LLM classify + notes -> store
 chunks in SQLite + LanceDB.
 """
 import shutil
+import re
 import subprocess
 import tempfile
 import threading
 import time
 import traceback
+from datetime import date, datetime
 from pathlib import Path
 
 from core import db, llm, vectorstore
@@ -23,15 +25,58 @@ CLASSIFY_SYSTEM = (
     "You organize study material for a student. Given content from a lecture or "
     "document, return JSON: {\"subject\": <short subject/course name>, "
     "\"title\": <short descriptive title>}. Reuse one of the existing subjects "
-    "when it fits; otherwise invent a concise new one."
+    "only when the material clearly belongs to it; otherwise invent a concise new one. "
+    "Never put material into an unrelated existing subject."
 )
 
 NOTES_SYSTEM = (
-    "You write clear, hierarchical study notes in markdown for a student. "
-    "Use headings, bullet points, and bold key terms. Capture definitions, "
-    "formulas and concepts faithfully. Keep the source references like "
-    "[@ mm:ss] or [p. N] that appear in the text next to the points they support. "
-    "Output only the markdown notes."
+    "You write accurate, structured study notes in Markdown using only facts explicitly present "
+    "in the supplied material. Never invent background, examples, definitions, formulas, or context. "
+    "If the material is short, produce a short note instead of expanding it with outside knowledge. "
+    "Use this structure when the material supports it: '# Title', '## Summary', '## Key concepts', "
+    "'## Detailed notes', and '## Formulas and definitions'. Omit empty sections. Use concise bullets, "
+    "numbered steps for procedures, tables only for genuine comparisons, and bold only for key terms. "
+    "Do not use emojis or decorative symbols. Preserve only exact timestamp or page references already "
+    "present in the supplied material. Never output placeholders such as '[@ mm:ss]' or '[p. N]'. "
+    "Output only the Markdown notes."
+)
+
+PLACEHOLDER_REFERENCE = re.compile(
+    r"\s*\[(?:@\s*)?(?:mm:ss|p\.\s*N)\]",
+    re.IGNORECASE,
+)
+DECORATIVE_SYMBOL = re.compile(
+    "["
+    "\U0001F000-\U0001FAFF"  # emoji and pictographs
+    "\U00002600-\U000027BF"  # miscellaneous symbols and dingbats
+    "]\ufe0f?"
+)
+DECORATIVE_BULLET = re.compile(r"^(\s*)[•●◦▪▫▸▹►‣]\s+", re.MULTILINE)
+OUTER_MARKDOWN_FENCE = re.compile(
+    r"^\s*```(?:markdown|md)?\s*\n(?P<body>.*)\n```\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _clean_generated_markdown(markdown: str) -> str:
+    """Normalize generated notes while preserving real citations and formulas."""
+    fenced = OUTER_MARKDOWN_FENCE.match(markdown)
+    cleaned = fenced.group("body") if fenced else markdown
+    cleaned = PLACEHOLDER_REFERENCE.sub("", cleaned)
+    cleaned = DECORATIVE_SYMBOL.sub("", cleaned)
+    cleaned = DECORATIVE_BULLET.sub(r"\1- ", cleaned)
+    cleaned = re.sub(r"^(\s*)\*\s+", r"\1- ", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+CALENDAR_SYSTEM = (
+    "Extract actionable calendar reminders from study material. Return JSON as "
+    "{\"events\": [{\"title\": string, \"date\": \"YYYY-MM-DD\", "
+    "\"start_time\": \"HH:MM\" or null, \"end_time\": \"HH:MM\" or null, "
+    "\"description\": string}]}. Include only explicit upcoming exams, deadlines, "
+    "submissions, classes, meetings, appointments, or direct requests to remember a date. "
+    "Do not treat the capture date, historical dates, source citations, or vague mentions as events. "
+    "Resolve relative dates against the supplied capture date. Return an empty events list when unsure."
 )
 
 
@@ -74,8 +119,17 @@ def _extract(item: dict) -> list[dict]:
             chunks.append({"text": f"[@ {_mmss(buf_start)}]{buf}", "ts_start": buf_start})
         if kind == "video":
             try:
-                from core.video import capture_stable_frames
-                capture_stable_frames(item["id"], path)
+                from core.video import analyze_frame, capture_stable_frames
+                for frame_id in capture_stable_frames(item["id"], path):
+                    result = analyze_frame(frame_id)
+                    markdown = result["markdown"].strip()
+                    frame = result["frame"]
+                    if markdown != "NO_RELEVANT_CONTENT":
+                        chunks.append({
+                            "text": f"[@ {_mmss(frame['timestamp'])}] Visual from lecture:\n{markdown}",
+                            "ts_start": frame["timestamp"], "image_path": frame["frame_path"],
+                            "frame_id": frame_id,
+                        })
             except Exception:
                 traceback.print_exc()  # transcript remains useful even if board capture fails
         return chunks
@@ -133,38 +187,121 @@ def _split(text: str) -> list[str]:
     return parts
 
 
-def _classify(full_text: str) -> tuple[str, str]:
+def _classify(full_text: str, filename: str) -> tuple[str, str]:
     existing = ", ".join(s["name"] for s in db.list_subjects()) or "(none yet)"
     result = llm.chat_json(
         CLASSIFY_SYSTEM,
-        f"Existing subjects: {existing}\n\nContent:\n{full_text[:4000]}",
+        f"Filename: {filename}\nExisting subjects: {existing}\n\nContent:\n{full_text[:4000]}",
     )
     return str(result.get("subject", "General")), str(result.get("title", "Untitled"))
 
 
-def _generate_notes(full_text: str) -> str:
+def _generate_notes(full_text: str, chunks: list[dict]) -> str:
     sections = []
     for i in range(0, len(full_text), NOTES_INPUT_CHARS):
         part = full_text[i:i + NOTES_INPUT_CHARS]
-        sections.append(llm.chat(NOTES_SYSTEM, part, max_tokens=1500))
-    return "\n\n".join(sections)
+        sections.append(_clean_generated_markdown(llm.chat(NOTES_SYSTEM, part, max_tokens=1500)))
+    notes = "\n\n".join(sections)
+    # Keep the source material in the note as well as the LLM's study guide.
+    # This is deliberately not truncated: a lecture upload must retain its
+    # complete timestamped transcript for reading and RAG retrieval.
+    if any(chunk.get("ts_start") is not None for chunk in chunks):
+        notes += "\n\n## Complete timestamped transcript\n\n" + full_text
+    visuals = [chunk for chunk in chunks if chunk.get("frame_id")]
+    if visuals:
+        appendix = ["## Important lecture visuals"]
+        for visual in visuals:
+            label = _mmss(visual["ts_start"])
+            appendix.extend([
+                f"### Board or diagram at {label}",
+                f"![Lecture visual at {label}](/api/video/frames/{visual['frame_id']}/image)",
+                visual["text"],
+            ])
+        notes += "\n\n" + "\n\n".join(appendix)
+    return notes
+
+
+def _extract_calendar_reminders(full_text: str, capture_date: str) -> list[dict]:
+    result = llm.chat_json(
+        CALENDAR_SYSTEM,
+        f"Today: {date.today().isoformat()}\nCapture date: {capture_date}\n\nMaterial:\n{full_text[:8000]}",
+    )
+    raw_events = result.get("events", [])
+    if not isinstance(raw_events, list):
+        return []
+    events = []
+    for raw in raw_events[:20]:
+        if not isinstance(raw, dict) or not str(raw.get("title", "")).strip():
+            continue
+        try:
+            event_date = date.fromisoformat(str(raw.get("date", "")))
+        except ValueError:
+            continue
+        if event_date < date.today():
+            continue
+        start_time = raw.get("start_time") or None
+        end_time = raw.get("end_time") or None
+        try:
+            if start_time:
+                start_time = datetime.strptime(str(start_time), "%H:%M").strftime("%H:%M")
+            if end_time:
+                end_time = datetime.strptime(str(end_time), "%H:%M").strftime("%H:%M")
+        except ValueError:
+            start_time = None
+            end_time = None
+        events.append({
+            "title": str(raw["title"]).strip()[:200],
+            "event_date": event_date.isoformat(),
+            "start_time": start_time,
+            "end_time": end_time if start_time else None,
+            "description": str(raw.get("description", "")).strip()[:1000],
+        })
+    return events
+
+
+def _queue_calendar_reminders(item_id: int, full_text: str, capture_date: str,
+                              source: str) -> None:
+    try:
+        for event in _extract_calendar_reminders(full_text, capture_date):
+            description = f"Detected from Study Buddy: {source}"
+            if event["description"]:
+                description += f"\n\n{event['description']}"
+            db.add_calendar_reminder(
+                item_id, event["title"], event["event_date"],
+                event["start_time"], event["end_time"], description,
+            )
+    except Exception:
+        # Calendar automation must never prevent the source notes from being saved.
+        traceback.print_exc()
 
 
 def process_item(item: dict):
     db.set_status(item["id"], "processing")
+    # A queued item stays an explicit error when the LAN LLM is down; do not
+    # silently create a weaker transcript-only or heuristic note.
+    llm.require_available()
     chunks = _extract(item)
     if not chunks:
         raise ValueError("no text could be extracted from this file")
 
+    capture_date = item.get("capture_date") or datetime.fromtimestamp(
+        item["created_at"]
+    ).date().isoformat()
+    capture_context = [f"[Capture date: {capture_date}]"]
+    if item.get("metadata_text"):
+        capture_context.append(f"[Capture context: {item['metadata_text'].strip()}]")
+    chunks.insert(0, {"text": "\n".join(capture_context)})
+
     full_text = "\n\n".join(c["text"] for c in chunks)
-    subject_name, title = _classify(full_text)
+    subject_name, title = _classify(full_text, item["filename"])
     subject_id = db.get_or_create_subject(subject_name)
     db.set_item_meta(item["id"], title, subject_id)
 
-    notes_md = _generate_notes(full_text)
+    notes_md = _generate_notes(full_text, chunks)
     db.add_note(item["id"], notes_md)
 
-    source = f"{title} ({item['filename']})"
+    source = f"{title} — {capture_date} ({item['filename']})"
+    _queue_calendar_reminders(item["id"], full_text, capture_date, source)
     rows = []
     for c in chunks:
         chunk_id = db.add_chunk(
@@ -213,12 +350,9 @@ def worker_loop(stop: threading.Event | None = None):
     while stop is None or not stop.is_set():
         try:
             _sweep_inbox()
-            item = db.next_pending_item()
+            item = db.claim_next_pending_item()
             if item is None:
                 time.sleep(2)
-                continue
-            if not llm.is_available():
-                time.sleep(5)  # wait for LM Studio; keep the item queued
                 continue
             try:
                 process_item(item)

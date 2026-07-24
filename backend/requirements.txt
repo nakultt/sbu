@@ -30,3 +30,11 @@ pyobjc-framework-Cocoa
 fastapi
 uvicorn[standard]
 python-multipart
+
+# Telegram client
+python-telegram-bot==22.8
+
+# Google Calendar
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib

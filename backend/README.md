@@ -1,8 +1,9 @@
 # Study Buddy backend
 
 The Python backend contains the FastAPI service, background ingestion pipeline,
-handwriting recognition, video-board review, local model integrations,
-Streamlit fallback UI, and macOS menu-bar capture app.
+portable notes, persistent chat, flashcards, Google Calendar integration,
+Telegram UI, handwriting recognition, video-board review, local model
+integrations, Streamlit fallback UI, and macOS menu-bar capture app.
 
 From this directory:
 
@@ -17,4 +18,10 @@ Run the smoke check with:
 
 ```bash
 .venv/bin/python scripts/smoke.py
+```
+
+Run the test suite with:
+
+```bash
+.venv/bin/python -m unittest discover -s tests
 ```
