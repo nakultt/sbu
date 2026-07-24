@@ -25,7 +25,7 @@ function LineEditor({ line, onSaved }: { line: HwLine; onSaved: () => void }) {
   }
 
   return (
-    <div className="rounded-2xl border border-line bg-white p-3">
+    <div className="surface p-3">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={`${API}${line.crop_url}`}
@@ -117,7 +117,7 @@ export default function HandwritingPage() {
     >
       <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
         <div className="space-y-4">
-          <div className="rounded-2xl border border-line bg-white p-5">
+          <div className="surface p-5">
             <h2 className="font-semibold">Upload a page</h2>
             <p className="mt-1 text-xs text-muted">
               Photos or scans of handwritten notes (multi-line pages are fine).
@@ -138,7 +138,7 @@ export default function HandwritingPage() {
             </button>
           </div>
 
-          <div className="rounded-2xl border border-line bg-white p-5">
+          <div className="surface p-5">
             <h2 className="flex items-center gap-2 font-semibold">
               <Sparkles className="h-4 w-4 text-brand" /> Learns your words
             </h2>
@@ -152,7 +152,7 @@ export default function HandwritingPage() {
             </div>
           </div>
 
-          <div className="rounded-2xl border border-line bg-white p-3">
+          <div className="surface p-3">
             <h2 className="px-2 pt-1 text-sm font-semibold">Pages</h2>
             <div className="mt-2 max-h-96 space-y-1 overflow-y-auto">
               {pages.length === 0 && (
@@ -163,7 +163,7 @@ export default function HandwritingPage() {
                   key={p.id}
                   onClick={() => selectPage(p.id)}
                   className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm ${
-                    selected === p.id ? "bg-brand-soft text-brand" : "hover:bg-page"
+                    selected === p.id ? "bg-brand-soft text-brand" : "hover:bg-panel-muted"
                   }`}
                 >
                   {p.status === "processing" ? (
@@ -192,12 +192,12 @@ export default function HandwritingPage() {
               Upload a page or pick one from the list.
             </div>
           ) : detail.status === "processing" ? (
-            <div className="flex h-64 flex-col items-center justify-center gap-3 rounded-2xl border border-line bg-white text-sm text-muted">
+            <div className="flex h-64 flex-col items-center justify-center gap-3 surface text-sm text-muted">
               <Loader2 className="h-6 w-6 animate-spin text-brand" />
               Reading your handwriting line by line…
             </div>
           ) : detail.status === "error" ? (
-            <div className="rounded-2xl border border-line bg-white p-6 text-sm text-red-500">
+            <div className="surface p-6 text-sm text-red-500">
               Recognition failed: {detail.error}
             </div>
           ) : (
@@ -207,7 +207,7 @@ export default function HandwritingPage() {
                 <button
                   onClick={toNotes}
                   disabled={sentToNotes}
-                  className="inline-flex items-center gap-2 rounded-xl border border-line bg-white px-3 py-2 text-sm font-medium disabled:opacity-60"
+                  className="inline-flex items-center gap-2 button-secondary disabled:opacity-60"
                 >
                   {sentToNotes ? (
                     <>

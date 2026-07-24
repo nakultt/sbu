@@ -1,4 +1,5 @@
 """SQLite metadata store: items, subjects, notes, chunks."""
+import logging
 import sqlite3
 import time
 import json
@@ -6,6 +7,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from core.config import DB_PATH
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS subjects (
@@ -90,6 +93,14 @@ CREATE TABLE IF NOT EXISTS video_frames (
     created_at REAL NOT NULL,
     reviewed_at REAL
 );
+CREATE TABLE IF NOT EXISTS doc_figures (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES items(id),
+    page INTEGER,
+    caption TEXT NOT NULL DEFAULT '',
+    image_path TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS video_ocr_segments (
     id INTEGER PRIMARY KEY,
     frame_id INTEGER NOT NULL REFERENCES video_frames(id),
@@ -151,15 +162,23 @@ CREATE INDEX IF NOT EXISTS idx_flashcards_deck_position
 def conn():
     c = sqlite3.connect(DB_PATH, timeout=30)
     c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys=ON")
+    c.execute("PRAGMA busy_timeout=30000")
     try:
         yield c
         c.commit()
+    except Exception:
+        c.rollback()
+        raise
     finally:
         c.close()
 
 
 def init_db():
     with conn() as c:
+        # WAL permits API reads while the ingestion worker is writing.
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA synchronous=NORMAL")
         c.executescript(SCHEMA)
         try:  # migration for hw_pages created before the ingest integration
             c.execute("ALTER TABLE hw_pages ADD COLUMN item_id INTEGER REFERENCES items(id)")
@@ -182,6 +201,7 @@ def init_db():
         # Older versions queued extracted events automatically. Make any
         # unsynced legacy entries explicitly reviewable instead.
         c.execute("UPDATE calendar_reminders SET status='proposed' WHERE status='pending'")
+    logger.info("database ready", extra={"path": str(DB_PATH)})
 
 
 def add_item(filename: str, stored_path: str, kind: str,
@@ -208,6 +228,30 @@ def set_status(item_id: int, status: str, error: str | None = None):
             "UPDATE items SET status=?, error=?, processed_at=? WHERE id=?",
             (status, error, time.time() if status in ("done", "error") else None, item_id),
         )
+
+
+def retry_item(item_id: int) -> None:
+    with conn() as c:
+        c.execute(
+            "UPDATE items SET status='pending', error=NULL, processed_at=NULL WHERE id=?",
+            (item_id,),
+        )
+
+
+def index_rows_for_item(item_id: int) -> list[dict]:
+    """Return persisted SQLite chunks in the shape expected by LanceDB."""
+    with conn() as c:
+        rows = c.execute(
+            "SELECT chunks.id AS chunk_id, chunks.item_id, "
+            "COALESCE(subjects.name, 'General') AS subject, "
+            "chunks.source_label, chunks.text, chunks.ts_start, chunks.page, "
+            "chunks.image_path "
+            "FROM chunks JOIN items ON items.id=chunks.item_id "
+            "LEFT JOIN subjects ON subjects.id=items.subject_id "
+            "WHERE chunks.item_id=? ORDER BY chunks.id",
+            (item_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def set_item_meta(item_id: int, title: str, subject_id: int):
@@ -277,6 +321,41 @@ def add_note(item_id: int, markdown: str) -> int:
         ).lastrowid
 
 
+def update_note(note_id: int, markdown: str) -> None:
+    with conn() as c:
+        c.execute("UPDATE notes SET markdown=? WHERE id=?", (markdown, note_id))
+
+
+def add_doc_figure(item_id: int, page: int | None, caption: str, image_path: str) -> int:
+    with conn() as c:
+        return c.execute(
+            "INSERT INTO doc_figures (item_id, page, caption, image_path, created_at) "
+            "VALUES (?,?,?,?,?)", (item_id, page, caption, image_path, time.time()),
+        ).lastrowid
+
+
+def get_doc_figure(figure_id: int):
+    with conn() as c:
+        row = c.execute("SELECT * FROM doc_figures WHERE id=?", (figure_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_doc_figures(item_id: int):
+    with conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM doc_figures WHERE item_id=? ORDER BY page, id", (item_id,)
+        ).fetchall()]
+
+
+def delete_doc_figures_for_item(item_id: int) -> list[str]:
+    """Delete an item's figure rows; return the image file paths to unlink."""
+    with conn() as c:
+        paths = [r["image_path"] for r in c.execute(
+            "SELECT image_path FROM doc_figures WHERE item_id=?", (item_id,)).fetchall()]
+        c.execute("DELETE FROM doc_figures WHERE item_id=?", (item_id,))
+    return paths
+
+
 def notes_for_item(item_id: int):
     with conn() as c:
         return [dict(r) for r in c.execute(
@@ -329,14 +408,16 @@ def add_task(label: str, due: str | None) -> int:
         ).lastrowid
 
 
-def set_task_done(task_id: int, done: bool):
+def set_task_done(task_id: int, done: bool) -> bool:
     with conn() as c:
-        c.execute("UPDATE tasks SET done=? WHERE id=?", (int(done), task_id))
+        return c.execute(
+            "UPDATE tasks SET done=? WHERE id=?", (int(done), task_id)
+        ).rowcount > 0
 
 
-def delete_task(task_id: int):
+def delete_task(task_id: int) -> bool:
     with conn() as c:
-        c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+        return c.execute("DELETE FROM tasks WHERE id=?", (task_id,)).rowcount > 0
 
 
 def add_hw_page(filename: str, image_path: str, item_id: int | None = None) -> int:
@@ -393,9 +474,11 @@ def delete_hw_lines(page_id: int):
         c.execute("DELETE FROM hw_lines WHERE page_id=?", (page_id,))
 
 
-def set_hw_correction(line_id: int, corrected_text: str | None):
+def set_hw_correction(line_id: int, corrected_text: str | None) -> bool:
     with conn() as c:
-        c.execute("UPDATE hw_lines SET corrected_text=? WHERE id=?", (corrected_text, line_id))
+        return c.execute(
+            "UPDATE hw_lines SET corrected_text=? WHERE id=?", (corrected_text, line_id)
+        ).rowcount > 0
 
 
 def hw_corrected_lines():
@@ -539,12 +622,12 @@ def list_calendar_proposals():
         ).fetchall()]
 
 
-def set_calendar_reminder_status(reminder_id: int, status: str):
+def set_calendar_reminder_status(reminder_id: int, status: str) -> bool:
     with conn() as c:
-        c.execute(
+        return c.execute(
             "UPDATE calendar_reminders SET status=?, error=NULL WHERE id=?",
             (status, reminder_id),
-        )
+        ).rowcount > 0
 
 
 def calendar_reminder_counts():

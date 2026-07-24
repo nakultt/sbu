@@ -1,7 +1,6 @@
-"""FastAPI backend for the Study Buddy web frontend.
+"""Shared FastAPI backend for Study Buddy web and mobile clients.
 
-Wraps the existing core/ modules and runs the ingestion worker.
-Run with:  .venv/bin/uvicorn server:app --port 8010
+The normal startup path is ``make backend`` from the repository root.
 """
 import json
 import logging
@@ -17,54 +16,193 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.routing import APIRoute
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from core import db, flashcards, llm, rag
-from core.config import AUDIOBOOKS_DIR, DATA_DIR, FILES_DIR, HW_CROPS_DIR, HW_PAGES_DIR, INBOX_DIR, kind_of
+from core import db, flashcards, llm, notes as notes_module, rag, vectorstore
+from core.config import (
+    AUDIOBOOKS_DIR, DATA_DIR, FIGURES_DIR, FILES_DIR, HW_CROPS_DIR, HW_PAGES_DIR,
+    INBOX_DIR, kind_of, settings,
+)
 from core.dates import capture_date_from_text, event_date_from_due_text
-from core.ingest import start_worker
+from core.ingest import start_worker, stop_worker
+from study_buddy import __version__
+
+logger = logging.getLogger(__name__)
 
 # Backward-compatible names for callers that imported the original server helpers.
 _capture_date_from_text = capture_date_from_text
 _event_date_from_due_text = event_date_from_due_text
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
-    """Initialize durable local services once per API process."""
+async def lifespan(application: FastAPI):
+    """Initialize and stop process-owned services exactly once."""
+    started_at = time.monotonic()
+    logger.info("initializing API services")
     db.init_db()
-    start_worker()
-    yield
+    worker = start_worker()
+    application.state.started_at = started_at
+    application.state.ingestion_worker = worker
+    logger.info(
+        "API services ready",
+        extra={
+            "version": application.version,
+            "environment": settings.environment,
+            "ingestion_worker": worker.name,
+        },
+    )
+    try:
+        yield
+    finally:
+        logger.info("shutting down API services")
+        stop_worker()
 
 
 app = FastAPI(
     title="Study Buddy API",
-    description="Local-first API for the Study Buddy learning workspace.",
-    version="1.0.0",
+    description=(
+        "The stable, shared HTTP contract for Study Buddy web and mobile clients."
+    ),
+    version=__version__,
     lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    openapi_tags=[
+        {"name": "system", "description": "Service metadata, health, and activity."},
+        {"name": "library", "description": "Subjects, source items, and uploads."},
+        {"name": "notes", "description": "Portable and editable study notes."},
+        {"name": "chat", "description": "Grounded questions and conversation history."},
+        {"name": "video", "description": "Lecture video review and board extraction."},
+        {"name": "flashcards", "description": "Generated study decks."},
+        {"name": "audiobooks", "description": "Generated audio study material."},
+        {"name": "calendar", "description": "Calendar connection and reminder proposals."},
+        {"name": "tasks", "description": "Student tasks and completion state."},
+        {"name": "handwriting", "description": "Handwriting recognition and correction."},
+    ],
 )
 app.add_middleware(
     CORSMiddleware,
-    # The local UI is often opened through 127.0.0.1 or the Mac's LAN address.
-    # No credentials are used, so accepting any local-browser origin is safe here.
-    allow_origins=["*"],
+    allow_origins=list(settings.cors_origins),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Request-ID", "X-Process-Time-Ms"],
 )
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.trusted_hosts))
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next):
+    """Attach a trace identifier and emit one concise access event."""
+    request_id = request.headers.get("X-Request-ID", "").strip()[:128] or uuid.uuid4().hex
+    started_at = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "unhandled request failure",
+            extra={
+                "request_id": request_id,
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
+        raise
+    elapsed_ms = round((time.perf_counter() - started_at) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Process-Time-Ms"] = str(elapsed_ms)
+    response.headers["X-API-Version"] = app.version
+    logger.info(
+        "request completed",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": elapsed_ms,
+        },
+    )
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception(request: Request, _: Exception):
+    """Return a stable public error shape without exposing internals."""
+    request_id = request.headers.get("X-Request-ID", "").strip()[:128]
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "An unexpected server error occurred",
+            "request_id": request_id or None,
+        },
+    )
+
+
+@app.get("/api", tags=["system"], summary="Describe the API")
+def api_metadata():
+    """Stable discovery endpoint shared by web and mobile clients."""
+    return {
+        "service": settings.service_name,
+        "version": app.version,
+        "docs": "/api/docs",
+        "openapi": "/api/openapi.json",
+        "health": {
+            "live": "/api/health/live",
+            "ready": "/api/health/ready",
+        },
+    }
 
 
 @app.get("/api/health")
 def health():
+    """Compatibility readiness check used by existing clients."""
+    vector_index = True
+    try:
+        vectorstore.ensure_ready()
+    except Exception:
+        vector_index = False
+        logging.exception("LanceDB health check failed")
     return {
-        "ok": True,
+        "ok": vector_index,
         "service": "study-buddy-api",
         "version": app.version,
         "llm": llm.is_available(),
         "storage": DATA_DIR.exists() and os.access(DATA_DIR, os.W_OK),
+        "vector_index": vector_index,
     }
+
+
+@app.get("/api/health/live", include_in_schema=False)
+def liveness():
+    """Cheap orchestration probe: the HTTP process can answer requests."""
+    return {
+        "ok": True,
+        "service": settings.service_name,
+        "version": app.version,
+        "uptime_seconds": round(time.monotonic() - app.state.started_at, 1)
+        if hasattr(app.state, "started_at")
+        else 0,
+    }
+
+
+@app.get("/api/health/ready", include_in_schema=False)
+def readiness():
+    """Dependency-aware probe suitable for traffic readiness checks."""
+    payload = health()
+    status_code = 200 if payload["ok"] and payload["storage"] else 503
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 @app.get("/api/stats")
@@ -89,17 +227,72 @@ def subjects():
     return db.list_subjects()
 
 
+class SubjectCreate(BaseModel):
+    name: str
+
+
+@app.post("/api/subjects")
+def create_subject(req: SubjectCreate):
+    name = " ".join(req.name.split())
+    if not name:
+        raise HTTPException(400, "Folder name is required")
+    if len(name) > 80:
+        raise HTTPException(400, "Folder name must be 80 characters or fewer")
+    with db.conn() as c:
+        existing = c.execute(
+            "SELECT id, name, created_at FROM subjects WHERE name=? COLLATE NOCASE", (name,)
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        subject_id = c.execute(
+            "INSERT INTO subjects (name, created_at) VALUES (?,?)", (name, time.time())
+        ).lastrowid
+        row = c.execute("SELECT * FROM subjects WHERE id=?", (subject_id,)).fetchone()
+    return dict(row)
+
+
 @app.get("/api/items")
 def items(subject_id: int | None = None):
     return db.list_items(subject_id)
 
 
+@app.post("/api/items/{item_id}/retry")
+def retry_item(item_id: int):
+    item = db.get_item(item_id)
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if item["status"] != "error":
+        raise HTTPException(409, "Only failed items can be retried")
+
+    rows = db.index_rows_for_item(item_id)
+    with db.conn() as c:
+        has_note = c.execute(
+            "SELECT 1 FROM notes WHERE item_id=? LIMIT 1", (item_id,)
+        ).fetchone() is not None
+
+    # Ingestion writes notes and SQLite chunks before the vector index. If both
+    # are present, repair only the missing final step so retrying cannot create
+    # duplicate notes, reminders, or chunks.
+    if has_note and rows:
+        try:
+            vectorstore.add_chunks(rows)
+        except Exception as error:
+            db.set_status(item_id, "error", f"Vector indexing failed: {error}"[:500])
+            raise HTTPException(503, "The vector index could not be repaired")
+        db.set_status(item_id, "done")
+        return {"ok": True, "status": "done", "recovered": "vector_index"}
+
+    db.retry_item(item_id)
+    return {"ok": True, "status": "pending", "recovered": "requeued"}
+
+
 @app.get("/api/notes")
 def notes(limit: int = 20):
+    limit = max(1, min(limit, 200))
     with db.conn() as c:
         rows = c.execute(
             "SELECT notes.id, notes.item_id, notes.markdown, notes.created_at, "
-            "items.title, items.kind, subjects.name AS subject "
+            "items.title, items.kind, items.subject_id, subjects.name AS subject "
             "FROM notes JOIN items ON items.id = notes.item_id "
             "LEFT JOIN subjects ON subjects.id = items.subject_id "
             "ORDER BY notes.created_at DESC LIMIT ?", (limit,)
@@ -248,7 +441,101 @@ def note_detail(note_id: int):
             "LEFT JOIN subjects ON subjects.id = items.subject_id "
             "WHERE notes.id=?", (note_id,)
         ).fetchone()
-    return dict(row) if row else {}
+    if not row:
+        raise HTTPException(404, "Note not found")
+    return dict(row)
+
+
+class NoteMove(BaseModel):
+    subject_id: int
+
+
+@app.patch("/api/notes/{note_id}")
+def move_note(note_id: int, req: NoteMove):
+    with db.conn() as c:
+        subject = c.execute(
+            "SELECT id, name FROM subjects WHERE id=?", (req.subject_id,)
+        ).fetchone()
+        if not subject:
+            raise HTTPException(404, "Subject folder not found")
+        note = c.execute(
+            "SELECT notes.item_id FROM notes WHERE notes.id=?", (note_id,)
+        ).fetchone()
+        if not note:
+            raise HTTPException(404, "Note not found")
+        c.execute(
+            "UPDATE items SET subject_id=? WHERE id=?", (subject["id"], note["item_id"])
+        )
+    try:
+        vectorstore.update_item_subject(note["item_id"], subject["name"])
+    except Exception:
+        logging.exception("Could not synchronize moved note with the vector index")
+    return {"ok": True, "subject_id": subject["id"], "subject": subject["name"]}
+
+
+class NoteEdit(BaseModel):
+    markdown: str
+
+
+@app.put("/api/notes/{note_id}")
+def edit_note(note_id: int, req: NoteEdit):
+    markdown = req.markdown.strip()
+    if not markdown:
+        raise HTTPException(400, "Note cannot be empty")
+    with db.conn() as c:
+        row = c.execute(
+            "SELECT notes.item_id, items.title, items.filename, items.capture_date, "
+            "items.created_at, subjects.name AS subject FROM notes "
+            "JOIN items ON items.id = notes.item_id "
+            "LEFT JOIN subjects ON subjects.id = items.subject_id WHERE notes.id=?",
+            (note_id,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(404, "Note not found")
+    capture_date = row["capture_date"] or datetime.fromtimestamp(
+        row["created_at"]
+    ).date().isoformat()
+    source = f"{row['title'] or row['filename']} — {capture_date} ({row['filename']})"
+    notes_module.update_note_markdown(
+        note_id, row["item_id"], markdown, source, row["subject"] or "General",
+    )
+    return {"ok": True, "markdown": markdown}
+
+
+@app.delete("/api/notes/{note_id}")
+def delete_note(note_id: int):
+    with db.conn() as c:
+        note = c.execute(
+            "SELECT notes.item_id, items.kind FROM notes "
+            "JOIN items ON items.id=notes.item_id WHERE notes.id=?", (note_id,)
+        ).fetchone()
+        if not note:
+            raise HTTPException(404, "Note not found")
+        indexed_note_chunks = [row["id"] for row in c.execute(
+            "SELECT id FROM chunks WHERE item_id=? AND source_label LIKE '% — notes'",
+            (note["item_id"],),
+        ).fetchall()]
+        c.execute("DELETE FROM notes WHERE id=?", (note_id,))
+        if indexed_note_chunks:
+            placeholders = ",".join("?" for _ in indexed_note_chunks)
+            c.execute(f"DELETE FROM chunks WHERE id IN ({placeholders})", indexed_note_chunks)
+        remaining = c.execute(
+            "SELECT COUNT(*) FROM notes WHERE item_id=?", (note["item_id"],)
+        ).fetchone()[0]
+        if note["kind"] == "imported note" and remaining == 0:
+            c.execute("DELETE FROM items WHERE id=?", (note["item_id"],))
+    if remaining == 0:
+        # No note references this item's figures any more — reclaim them.
+        for figure_path in db.delete_doc_figures_for_item(note["item_id"]):
+            try:
+                Path(figure_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    try:
+        vectorstore.delete_chunks(indexed_note_chunks)
+    except Exception:
+        logging.exception("Could not synchronize deleted note with the vector index")
+    return {"ok": True}
 
 
 @app.post("/api/upload")
@@ -286,8 +573,13 @@ async def upload(
         try:
             with partial.open("wb") as output:
                 while block := await upload_file.read(1024 * 1024):
-                    output.write(block)
                     size += len(block)
+                    if size > settings.max_upload_mb * 1024 * 1024:
+                        raise HTTPException(
+                            413,
+                            f"{filename} is larger than {settings.max_upload_mb} MB",
+                        )
+                    output.write(block)
             if size == 0:
                 raise HTTPException(400, f"{filename} is empty")
             os.replace(partial, destination)
@@ -446,6 +738,24 @@ def video_file(item_id: int):
     return FileResponse(row["stored_path"])
 
 
+@app.get("/api/doc/figures/{name}")
+def doc_figure_image(name: str):
+    path = (FIGURES_DIR / Path(name).name).resolve()
+    if path.parent != FIGURES_DIR.resolve() or not path.exists():
+        raise HTTPException(404, "Figure not found")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.get("/api/items/{item_id}/file")
+def item_file(item_id: int):
+    """Serve the original uploaded source for jump-to-source (non-video kinds)."""
+    with db.conn() as c:
+        row = c.execute("SELECT stored_path, kind FROM items WHERE id=?", (item_id,)).fetchone()
+    if not row or row["kind"] not in ("pdf", "image", "text") or not Path(row["stored_path"]).exists():
+        raise HTTPException(404, "Source file not found")
+    return FileResponse(row["stored_path"])
+
+
 @app.get("/api/chunks/{chunk_id}/image")
 def chunk_image(chunk_id: int):
     with db.conn() as c:
@@ -498,7 +808,27 @@ def verify_video_frame(frame_id: int):
         "source_label": f"{frame['title'] or frame['filename']} — verified board",
         "text": result["markdown"], "ts_start": frame["timestamp"], "image_path": frame["frame_path"],
     }])
+    _add_frame_to_note(frame, result["markdown"])
     return {"markdown": result["markdown"], "frame": _video_frame_payload(frame)}
+
+
+def _add_frame_to_note(frame: dict, markdown: str) -> None:
+    """Insert a verified board frame inline into the item's note at its timestamp."""
+    existing = db.notes_for_item(frame["item_id"])
+    if not existing:
+        return
+    latest = existing[-1]
+    url = f"/api/video/frames/{frame['id']}/image"
+    if url in latest["markdown"]:
+        return  # already present — adding a frame twice is a no-op
+    caption = (markdown.splitlines() or ["Lecture visual"])[0].lstrip("# ").strip()[:120]
+    visual = {"token_id": -1, "url": url, "caption": caption or "Lecture visual",
+              "anchor": ("ts", int(frame["timestamp"]))}
+    updated = notes_module.place_visuals(latest["markdown"], [visual])
+    source = f"{frame['title'] or frame['filename']} — board"
+    notes_module.update_note_markdown(
+        latest["id"], frame["item_id"], updated, source, frame["subject"] or "General",
+    )
 
 
 @app.delete("/api/video/frames/{frame_id}")
@@ -545,7 +875,7 @@ def audiobooks():
 def audiobook_file(name: str):
     path = (AUDIOBOOKS_DIR / Path(name).name).resolve()
     if path.parent != AUDIOBOOKS_DIR.resolve() or not path.exists():
-        return {"error": "not found"}
+        raise HTTPException(404, "Audiobook not found")
     return FileResponse(path, media_type="audio/wav")
 
 
@@ -641,14 +971,16 @@ def approve_calendar_proposal(reminder_id: int):
 
     if not google_calendar.credentials():
         raise HTTPException(401, "Google Calendar is not connected")
-    db.set_calendar_reminder_status(reminder_id, "approved")
+    if not db.set_calendar_reminder_status(reminder_id, "approved"):
+        raise HTTPException(404, "Calendar proposal not found")
     result = google_calendar.sync_pending_reminders()
     return {"ok": True, **result}
 
 
 @app.post("/api/calendar/proposals/{reminder_id}/dismiss")
 def dismiss_calendar_proposal(reminder_id: int):
-    db.set_calendar_reminder_status(reminder_id, "dismissed")
+    if not db.set_calendar_reminder_status(reminder_id, "dismissed"):
+        raise HTTPException(404, "Calendar proposal not found")
     return {"ok": True}
 
 
@@ -659,22 +991,31 @@ class AudiobookRequest(BaseModel):
 
 @app.post("/api/audiobooks")
 def make_audiobook(req: AudiobookRequest):
+    name = " ".join(req.name.split())
+    if not req.note_ids:
+        raise HTTPException(400, "Select at least one note")
+    if not name:
+        raise HTTPException(400, "Audiobook name is required")
+    if len(name) > 100:
+        raise HTTPException(400, "Audiobook name must be 100 characters or fewer")
+    note_ids = list(dict.fromkeys(req.note_ids))
     with db.conn() as c:
         rows = c.execute(
-            f"SELECT markdown FROM notes WHERE id IN ({','.join('?'*len(req.note_ids))})",
-            req.note_ids,
+            f"SELECT markdown FROM notes WHERE id IN ({','.join('?' * len(note_ids))})",
+            note_ids,
         ).fetchall()
     combined = "\n\n".join(r["markdown"] for r in rows)
     if not combined.strip():
-        return {"error": "no notes selected"}
-    job_id = db.add_audiobook_job(req.name)
+        raise HTTPException(404, "None of the selected notes exist")
+    job_id = db.add_audiobook_job(name)
 
     def run():
         try:
             from core.audiobook import generate
-            path = generate(combined, req.name)
+            path = generate(combined, name)
             db.finish_audiobook_job(job_id, path.name)
         except Exception as e:
+            logger.exception("audiobook generation failed", extra={"job_id": job_id})
             db.finish_audiobook_job(job_id, None, str(e)[:500])
 
     threading.Thread(target=run, daemon=True, name=f"audiobook-{job_id}").start()
@@ -701,20 +1042,27 @@ def create_task(req: TaskCreate):
     label = req.label.strip()
     if not label:
         raise HTTPException(400, "Task label is required")
-    task_id = db.add_task(label, req.due)
-    result = {"id": task_id, "calendar_added": False}
+    if len(label) > 300:
+        raise HTTPException(400, "Task label must be 300 characters or fewer")
+    due = req.due.strip() if req.due else None
+    event_date = None
     if req.add_to_calendar:
-        if not req.due:
+        if not due:
             raise HTTPException(400, "A due date is required to add a task to Google Calendar")
-        event_date = event_date_from_due_text(req.due)
+        event_date = event_date_from_due_text(due)
         if event_date is None:
             raise HTTPException(400, "Enter a calendar date such as 2026-08-20, August 20, today, or tomorrow")
+    task_id = db.add_task(label, due)
+    result = {"id": task_id, "calendar_added": False}
+    if req.add_to_calendar:
         from core import google_calendar
         try:
             event_id = google_calendar.create_task_event({"id": task_id, "label": label}, event_date)
         except PermissionError as error:
+            db.delete_task(task_id)
             raise HTTPException(401, str(error))
         except Exception:
+            db.delete_task(task_id)
             raise HTTPException(502, "Google Calendar could not create the task event")
         db.set_task_google_event(task_id, event_id)
         result["calendar_added"] = True
@@ -723,23 +1071,51 @@ def create_task(req: TaskCreate):
 
 @app.patch("/api/tasks/{task_id}")
 def patch_task(task_id: int, req: TaskPatch):
-    db.set_task_done(task_id, req.done)
+    if not db.set_task_done(task_id, req.done):
+        raise HTTPException(404, "Task not found")
     return {"ok": True}
 
 
 @app.delete("/api/tasks/{task_id}")
 def remove_task(task_id: int):
-    db.delete_task(task_id)
+    if not db.delete_task(task_id):
+        raise HTTPException(404, "Task not found")
     return {"ok": True}
 
 
 @app.post("/api/handwriting/upload")
 async def handwriting_upload(files: list[UploadFile]):
+    if not files:
+        raise HTTPException(400, "Add at least one handwriting image")
     page_ids = []
     for f in files:
-        dest = HW_PAGES_DIR / f"page_{int(time.time()*1000)}_{Path(f.filename).name}"
-        dest.write_bytes(await f.read())
-        page_id = db.add_hw_page(f.filename, str(dest))
+        filename = Path(f.filename or "handwriting.png").name
+        if kind_of(Path(filename)) != "image":
+            await f.close()
+            raise HTTPException(415, f"Handwriting input must be an image: {filename}")
+        destination = HW_PAGES_DIR / f"page_{int(time.time()*1000)}_{uuid.uuid4().hex}_{filename}"
+        partial = destination.with_suffix(destination.suffix + ".part")
+        size = 0
+        try:
+            with partial.open("wb") as output:
+                while block := await f.read(1024 * 1024):
+                    size += len(block)
+                    if size > settings.max_upload_mb * 1024 * 1024:
+                        raise HTTPException(
+                            413,
+                            f"{filename} is larger than {settings.max_upload_mb} MB",
+                        )
+                    output.write(block)
+            if size == 0:
+                raise HTTPException(400, f"{filename} is empty")
+            os.replace(partial, destination)
+        except Exception:
+            partial.unlink(missing_ok=True)
+            destination.unlink(missing_ok=True)
+            raise
+        finally:
+            await f.close()
+        page_id = db.add_hw_page(filename, str(destination))
         page_ids.append(page_id)
 
         def run(pid=page_id):
@@ -747,7 +1123,9 @@ async def handwriting_upload(files: list[UploadFile]):
                 from core.handwriting import process_page
                 process_page(pid)
             except Exception:
-                pass  # status/error already stored by process_page
+                logger.exception(
+                    "handwriting processing failed", extra={"page_id": pid}
+                )
 
         threading.Thread(target=run, daemon=True, name=f"hw-page-{page_id}").start()
     return {"page_ids": page_ids}
@@ -762,7 +1140,7 @@ def handwriting_pages():
 def handwriting_page(page_id: int):
     page = db.get_hw_page(page_id)
     if not page:
-        return {"error": "not found"}
+        raise HTTPException(404, "Handwriting page not found")
     lines = db.list_hw_lines(page_id)
     for ln in lines:
         ln["crop_url"] = f"/api/handwriting/crops/{Path(ln['crop_path']).name}"
@@ -774,15 +1152,15 @@ def handwriting_page(page_id: int):
 def handwriting_crop(name: str):
     path = (HW_CROPS_DIR / Path(name).name).resolve()
     if path.parent != HW_CROPS_DIR.resolve() or not path.exists():
-        return {"error": "not found"}
+        raise HTTPException(404, "Handwriting crop not found")
     return FileResponse(path, media_type="image/png")
 
 
 @app.get("/api/handwriting/pageimage/{page_id}")
 def handwriting_page_image(page_id: int):
     page = db.get_hw_page(page_id)
-    if not page:
-        return {"error": "not found"}
+    if not page or not Path(page["image_path"]).exists():
+        raise HTTPException(404, "Handwriting page image not found")
     return FileResponse(page["image_path"])
 
 
@@ -793,7 +1171,8 @@ class LineCorrection(BaseModel):
 @app.patch("/api/handwriting/lines/{line_id}")
 def correct_line(line_id: int, req: LineCorrection):
     text = req.corrected_text.strip() if req.corrected_text else None
-    db.set_hw_correction(line_id, text or None)
+    if not db.set_hw_correction(line_id, text or None):
+        raise HTTPException(404, "Handwriting line not found")
     return {"ok": True}
 
 
@@ -802,13 +1181,15 @@ def handwriting_to_notes(page_id: int):
     """Drop the page's text into the inbox so the normal pipeline makes notes."""
     page = db.get_hw_page(page_id)
     if not page:
-        return {"error": "not found"}
+        raise HTTPException(404, "Handwriting page not found")
     lines = db.list_hw_lines(page_id)
     text = "\n".join((ln["corrected_text"] or ln["pred_text"]) for ln in lines).strip()
     if not text:
-        return {"error": "page has no text yet"}
+        raise HTTPException(409, "Handwriting page has no recognized text yet")
     stem = Path(page["filename"]).stem or "handwriting"
-    (INBOX_DIR / f"handwritten_{stem}_{page_id}.txt").write_text(text)
+    (INBOX_DIR / f"handwritten_{stem}_{page_id}.txt").write_text(
+        text, encoding="utf-8"
+    )
     return {"ok": True}
 
 
@@ -819,6 +1200,7 @@ def handwriting_status():
 
 @app.get("/api/activity")
 def activity(limit: int = 10):
+    limit = max(1, min(limit, 100))
     with db.conn() as c:
         items_rows = c.execute(
             "SELECT filename, kind, status, created_at, title FROM items "
@@ -837,3 +1219,32 @@ def activity(limit: int = 10):
         for r in notes_rows
     ]
     return sorted(events, key=lambda e: -e["at"])[:limit]
+
+
+# Route domains are reflected in OpenAPI so both web and mobile can generate
+# clear client surfaces from the same contract.
+_ROUTE_TAGS = (
+    ("/api/health", "system"),
+    ("/api/stats", "system"),
+    ("/api/activity", "system"),
+    ("/api/notes", "notes"),
+    ("/api/ask", "chat"),
+    ("/api/chat", "chat"),
+    ("/api/video", "video"),
+    ("/api/flashcards", "flashcards"),
+    ("/api/audiobooks", "audiobooks"),
+    ("/api/calendar", "calendar"),
+    ("/api/tasks", "tasks"),
+    ("/api/handwriting", "handwriting"),
+    ("/api/subjects", "library"),
+    ("/api/items", "library"),
+    ("/api/upload", "library"),
+    ("/api/chunks", "library"),
+    ("/api/doc", "library"),
+)
+for _route in app.routes:
+    if not isinstance(_route, APIRoute) or _route.tags:
+        continue
+    _route.tags = [
+        tag for prefix, tag in _ROUTE_TAGS if _route.path.startswith(prefix)
+    ] or ["system"]

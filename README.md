@@ -64,36 +64,48 @@ lightweight (Moonshine base, MiniLM embeddings, Kokoro 82M, Apple's built-in OCR
 
 ## Setup
 
-```bash
-cd backend
-uv venv --python 3.12 .venv        # or: python3.12 -m venv .venv
-uv pip install -p .venv -r requirements.txt   # or: .venv/bin/pip install -r requirements.txt
+The run commands below create and populate their own local dependency
+environments. Backend dependencies are locked by `backend/uv.lock`. To
+customize the defaults, create the backend configuration once:
 
-cp .env.example .env   # adjust LMSTUDIO_MODEL etc. if needed
+```bash
+cp backend/.env.example backend/.env
+# Adjust backend/.env, including LMSTUDIO_MODEL, if needed.
 ```
 
 ## Run
 
+From the project root, the whole primary application now has one command per
+service:
+
 ```bash
-# 1. The API backend (from the project root; also runs the ingestion worker)
-cd backend && .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8010
+# Terminal 1 — shared web/mobile API, ingestion, macOS menu bar, and Telegram bot
+make backend
 
-# 2. In another terminal, the web frontend — http://localhost:3000
-cd web && bun install && bun run dev
+# Terminal 2 — Next.js at http://localhost:3000
+make frontend
+```
 
-# 3. In another terminal, the overlay buddy (optional)
-cd backend && .venv/bin/python -m buddy.menubar
+`make backend` is the single normal backend startup command. It starts the API,
+exactly one ingestion worker, and configured optional clients under one managed
+lifecycle. The commands install their service dependencies on the first run. Override the
+defaults with `BACKEND_HOST`, `BACKEND_PORT`, `FRONTEND_HOST`, or
+`FRONTEND_PORT` when needed. On macOS, `make backend` also launches the 📚
+menu-bar capture app. When `TELEGRAM_BOT_TOKEN` is configured, it launches the
+Telegram bot too. All processes stop together. Set `STUDY_BUDDY_MENUBAR=0` or
+`STUDY_BUDDY_TELEGRAM=0` to disable either optional interface.
 
-# 4. In another terminal, Telegram UI (the web frontend is not required)
-cd backend && .venv/bin/python telegram_bot.py
+Optional standalone clients keep their own commands:
 
-# Alternative minimal UI (no Node needed): Streamlit homepage
+```bash
+# Minimal Streamlit UI (no Node needed)
 cd backend && .venv/bin/streamlit run app.py
 ```
 
-Open http://localhost:8501, drop in a lecture recording or PDF, and watch the
-queue on the Upload tab. Once processed, it appears in the Library and becomes
-searchable in Ask My Notes.
+Open http://localhost:3000, drop in a lecture recording or PDF, and watch the
+queue on the Files page. Once processed, it appears in Notes and becomes
+searchable in Ask My Notes. The optional Streamlit UI runs at
+http://localhost:8501.
 
 The Next.js dashboard proxies same-origin `/api/*` requests to
 `http://127.0.0.1:8010` by default. Set `STUDY_BUDDY_API_URL` before starting
@@ -102,13 +114,23 @@ Next.js only when the FastAPI service runs at a different address.
 Quick health check without LM Studio or media files:
 
 ```bash
-cd backend && .venv/bin/python scripts/smoke.py
+make backend-smoke
 ```
+
+Run the backend test suite with `make backend-test`. API discovery, interactive
+documentation, and the shared OpenAPI contract are available at `/api`,
+`/api/docs`, and `/api/openapi.json` respectively.
 
 ## Configuration (`backend/.env`)
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `APP_ENV` | `development` | Runtime profile: `development`, `test`, or `production` |
+| `BACKEND_HOST` / `BACKEND_PORT` | `0.0.0.0` / `8010` | API bind address |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / profile default | Console logs locally, JSON logs in production |
+| `TRUSTED_HOSTS` | `*` | Accepted Host headers; explicit values are required in production |
+| `CORS_ORIGINS` | local web origins | Comma-separated browser origins; native mobile does not use CORS |
+| `MAX_UPLOAD_MB` | `1000` | Per-file API upload limit |
 | `LMSTUDIO_BASE_URL` | `http://localhost:1234/v1` | LM Studio server |
 | `LMSTUDIO_API_KEY` | `lm-studio` | API key (any value for local) |
 | `LMSTUDIO_MODEL` | `qwen3.5-4b-mlx` | Chat model id in LM Studio; it must exactly match an ID returned by `GET /v1/models` |
@@ -147,12 +169,14 @@ callback is handled at port 8010.
 
 ```
 web/                      Next.js dashboard
-backend/server.py         FastAPI service (+ ingestion worker)
+backend/server.py         Shared FastAPI web/mobile API
+backend/study_buddy/      Managed runtime, lifecycle entrypoint, and logging
+backend/pyproject.toml    Locked Python project definition
 backend/telegram_bot.py   Private Telegram UI
 backend/app.py            Streamlit fallback UI
 backend/buddy/            macOS menu-bar capture app
-backend/core/             ingestion, notes, RAG, calendar, flashcards,
-                          handwriting, video review, and audiobook logic
+backend/core/             ingestion, editable notes, figures, RAG, calendar,
+                          flashcards, handwriting, video review, and audiobooks
 backend/tests/            Backend tests
 backend/data/             Local app data                              (gitignored)
 backend/inbox/            Capture drop-zone                           (gitignored)

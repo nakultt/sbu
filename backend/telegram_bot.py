@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import mimetypes
+import os
 import re
 import subprocess
 import tempfile
@@ -915,12 +916,21 @@ def build_application() -> Application:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if os.getenv("STUDY_BUDDY_MANAGED") == "1":
+        from study_buddy.logging import configure_logging
+
+        configure_logging()
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
     # httpx includes the Bot API token in request URLs at INFO level.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     db.init_db()
-    start_worker()
+    if os.getenv("STUDY_BUDDY_MANAGED") != "1":
+        start_worker()
     application = build_application()
     log.info("Study Buddy Telegram bot is polling")
     application.run_polling(drop_pending_updates=False, allowed_updates=Update.ALL_TYPES)

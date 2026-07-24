@@ -49,6 +49,78 @@ class UploadApiTests(unittest.TestCase):
         self.assertEqual(response.json()["items"][0]["kind"], "video")
         self.assertEqual(db.list_items()[0]["kind"], "video")
 
+    @patch("server.vectorstore.add_chunks")
+    def test_retry_repairs_completed_sqlite_work_without_duplicate_notes(self, add_chunks):
+        subject_id = db.get_or_create_subject("Mathematics")
+        item_id = db.add_item("test.txt", "/tmp/test.txt", "text")
+        db.set_item_meta(item_id, "July 26 Test", subject_id)
+        note_id = db.add_note(item_id, "# July 26 Test")
+        chunk_id = db.add_chunk(item_id, "Study reminder", "July 26 Test — notes")
+        db.set_status(item_id, "error", "Table 'chunks' already exists")
+
+        response = self.client.post(f"/api/items/{item_id}/retry")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recovered"], "vector_index")
+        self.assertEqual(db.get_item(item_id)["status"], "done")
+        self.assertEqual([note["id"] for note in db.notes_for_item(item_id)], [note_id])
+        add_chunks.assert_called_once()
+        self.assertEqual(add_chunks.call_args.args[0][0]["chunk_id"], chunk_id)
+
+    def test_retry_requeues_failure_that_has_no_completed_note(self):
+        item_id = db.add_item("broken.txt", "/tmp/broken.txt", "text")
+        db.set_status(item_id, "error", "model unavailable")
+
+        response = self.client.post(f"/api/items/{item_id}/retry")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["recovered"], "requeued")
+        self.assertEqual(db.get_item(item_id)["status"], "pending")
+
+    def test_create_subject_folder_reuses_case_insensitive_name(self):
+        first = self.client.post("/api/subjects", json={"name": "Computer Science"})
+        second = self.client.post("/api/subjects", json={"name": " computer   science "})
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(first.json()["id"], second.json()["id"])
+        self.assertEqual(len(db.list_subjects()), 1)
+
+    @patch("server.vectorstore.update_item_subject")
+    def test_move_note_changes_subject_folder_and_vector_metadata(self, update_subject):
+        old_subject = db.get_or_create_subject("Physics")
+        new_subject = db.get_or_create_subject("Computer Science")
+        item_id = db.add_item("lecture.txt", "/tmp/lecture.txt", "text")
+        db.set_item_meta(item_id, "Algorithms", old_subject)
+        note_id = db.add_note(item_id, "# Algorithms")
+
+        response = self.client.patch(
+            f"/api/notes/{note_id}", json={"subject_id": new_subject}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.get_item(item_id)["subject_id"], new_subject)
+        update_subject.assert_called_once_with(item_id, "Computer Science")
+
+    @patch("server.vectorstore.delete_chunks")
+    def test_delete_note_keeps_source_but_removes_note_chunks(self, delete_chunks):
+        subject_id = db.get_or_create_subject("Computer Science")
+        item_id = db.add_item("lecture.txt", "/tmp/lecture.txt", "text")
+        db.set_item_meta(item_id, "Trees", subject_id)
+        note_id = db.add_note(item_id, "# Trees")
+        raw_chunk = db.add_chunk(item_id, "raw lecture", "Trees — source")
+        note_chunk = db.add_chunk(item_id, "generated note", "Trees — source — notes")
+
+        response = self.client.delete(f"/api/notes/{note_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.notes_for_item(item_id), [])
+        self.assertIsNotNone(db.get_item(item_id))
+        with db.conn() as c:
+            remaining = [row["id"] for row in c.execute("SELECT id FROM chunks").fetchall()]
+        self.assertEqual(remaining, [raw_chunk])
+        delete_chunks.assert_called_once_with([note_chunk])
+
     @patch("server._answer_question")
     @patch("core.stt.transcribe_media")
     def test_audio_question_is_transcribed_then_sent_to_ask_flow(self, transcribe, answer):
@@ -76,6 +148,98 @@ class UploadApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("local AI", response.json()["detail"])
         self.assertEqual(db.list_chat_turns(), [])
+
+    @patch("core.notes.vectorstore")
+    def test_edit_note_persists_and_reindexes(self, _vs):
+        subject_id = db.get_or_create_subject("Physics")
+        item_id = db.add_item("lecture.pdf", "/tmp/lecture.pdf", "pdf")
+        db.set_item_meta(item_id, "Waves", subject_id)
+        note_id = db.add_note(item_id, "# Waves\n\nOld body.")
+
+        response = self.client.put(
+            f"/api/notes/{note_id}", json={"markdown": "# Waves\n\nNew edited body."}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(db.notes_for_item(item_id)[0]["markdown"], "# Waves\n\nNew edited body.")
+
+    def test_edit_note_rejects_empty_markdown(self):
+        item_id = db.add_item("l.txt", "/tmp/l.txt", "text")
+        note_id = db.add_note(item_id, "# Something")
+
+        response = self.client.put(f"/api/notes/{note_id}", json={"markdown": "   "})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_item_file_serves_pdf_source(self):
+        source = self.root / "doc.pdf"
+        source.write_bytes(b"%PDF-1.4 minimal")
+        item_id = db.add_item("doc.pdf", str(source), "pdf")
+
+        response = self.client.get(f"/api/items/{item_id}/file")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"%PDF-1.4 minimal")
+
+    def test_item_file_404_for_video_kind(self):
+        item_id = db.add_item("v.mp4", "/tmp/v.mp4", "video")
+        response = self.client.get(f"/api/items/{item_id}/file")
+        self.assertEqual(response.status_code, 404)
+
+    def test_doc_figure_rejects_traversal(self):
+        with patch.object(server, "FIGURES_DIR", self.root / "figures"):
+            (self.root / "figures").mkdir()
+            with self.assertRaises(server.HTTPException) as ctx:
+                server.doc_figure_image("../../secret.png")
+            self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_api_discovery_and_trace_headers_are_available_to_all_clients(self):
+        response = self.client.get("/api")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["openapi"], "/api/openapi.json")
+        self.assertEqual(response.headers["x-api-version"], server.app.version)
+        self.assertTrue(response.headers["x-request-id"])
+        self.assertIn("x-process-time-ms", response.headers)
+
+    def test_missing_resources_use_http_404(self):
+        self.assertEqual(self.client.get("/api/notes/999999").status_code, 404)
+        self.assertEqual(self.client.patch(
+            "/api/tasks/999999", json={"done": True}
+        ).status_code, 404)
+        self.assertEqual(self.client.delete("/api/tasks/999999").status_code, 404)
+        self.assertEqual(
+            self.client.get("/api/audiobooks/missing.wav").status_code, 404
+        )
+
+    def test_audiobook_requires_at_least_one_note(self):
+        response = self.client.post(
+            "/api/audiobooks", json={"note_ids": [], "name": "Revision"}
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_handwriting_upload_rejects_non_image_files(self):
+        response = self.client.post(
+            "/api/handwriting/upload",
+            files=[("files", ("lecture.txt", b"notes", "text/plain"))],
+        )
+
+        self.assertEqual(response.status_code, 415)
+
+    @patch("core.google_calendar.create_task_event", side_effect=RuntimeError("offline"))
+    def test_failed_calendar_task_creation_does_not_leave_partial_task(self, _create):
+        response = self.client.post(
+            "/api/tasks",
+            json={
+                "label": "Submit report",
+                "due": "2026-08-20",
+                "add_to_calendar": True,
+            },
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(db.list_tasks(), [])
 
 
 if __name__ == "__main__":

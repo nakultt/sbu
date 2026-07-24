@@ -1,4 +1,7 @@
-export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8010";
+// Use same-origin API paths by default. Next proxies them to FastAPI, which
+// keeps server rendering and browser hydration identical and also works when
+// the dashboard is opened from another device on the LAN.
+export const API = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ?? "";
 
 export async function getJSON<T>(path: string): Promise<T> {
   const res = await fetch(`${API}${path}`, { cache: "no-store" });
@@ -20,6 +23,7 @@ export interface Stats {
   notes: number;
   files: number;
   chunks: number;
+  flashcards: number;
   audiobooks: number;
   disk_used_gb: number;
   disk_total_gb: number;
@@ -31,8 +35,15 @@ export interface NotePreview {
   created_at: number;
   title: string | null;
   kind: string;
+  subject_id: number | null;
   subject: string | null;
   preview: string;
+}
+
+export interface Subject {
+  id: number;
+  name: string;
+  created_at: number;
 }
 
 export interface Item {
@@ -43,7 +54,15 @@ export interface Item {
   error: string | null;
   title: string | null;
   subject: string | null;
+  metadata_text?: string | null;
+  capture_date?: string | null;
   created_at: number;
+}
+
+export interface RetryResult {
+  ok: boolean;
+  status: "pending" | "done";
+  recovered: "requeued" | "vector_index";
 }
 
 export interface ActivityEvent {
@@ -56,6 +75,57 @@ export interface Audiobook {
   name: string;
   created_at: number;
   size_mb: number;
+}
+
+export interface HwPage {
+  id: number;
+  filename: string;
+  status: "processing" | "done" | "error";
+  error: string | null;
+  item_id: number | null;
+  created_at: number;
+  line_count: number;
+  corrected_count: number;
+}
+
+export interface HwLine {
+  id: number;
+  line_index: number;
+  crop_url: string;
+  pred_text: string;
+  corrected_text: string | null;
+}
+
+export interface HwPageDetail extends Omit<HwPage, "line_count" | "corrected_count"> {
+  lines: HwLine[];
+}
+
+export interface HwStatus {
+  corrected_lines: number;
+}
+
+export interface VideoSegment {
+  id: number;
+  segment_index: number;
+  crop_url: string;
+  raw_text: string;
+  table_markdown: string | null;
+  status: "pending" | "done";
+}
+
+export interface VideoFrame {
+  id: number;
+  item_id: number;
+  timestamp: number;
+  title: string | null;
+  filename: string;
+  status: "awaiting_review" | "auto_processed" | "reviewed";
+  segment_count: number;
+  done_segments: number | null;
+  image_url: string;
+  video_url: string;
+  formatted_markdown: string | null;
+  segments?: VideoSegment[];
 }
 
 export function timeAgo(ts: number): string {

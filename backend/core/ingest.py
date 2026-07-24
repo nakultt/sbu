@@ -4,6 +4,7 @@ Flow per item: extract text (STT/OCR/PDF) -> LLM classify + notes -> store
 chunks in SQLite + LanceDB.
 """
 import shutil
+import logging
 import re
 import subprocess
 import tempfile
@@ -15,6 +16,8 @@ from pathlib import Path
 
 from core import db, llm, vectorstore
 from core.config import FILES_DIR, INBOX_DIR, kind_of
+
+logger = logging.getLogger(__name__)
 
 CHUNK_CHARS = 900
 NOTES_INPUT_CHARS = 5000
@@ -30,16 +33,30 @@ CLASSIFY_SYSTEM = (
 )
 
 NOTES_SYSTEM = (
-    "You write accurate, structured study notes in Markdown using only facts explicitly present "
-    "in the supplied material. Never invent background, examples, definitions, formulas, or context. "
-    "If the material is short, produce a short note instead of expanding it with outside knowledge. "
-    "Use this structure when the material supports it: '# Title', '## Summary', '## Key concepts', "
-    "'## Detailed notes', and '## Formulas and definitions'. Omit empty sections. Use concise bullets, "
-    "numbered steps for procedures, tables only for genuine comparisons, and bold only for key terms. "
-    "Do not use emojis or decorative symbols. Preserve only exact timestamp or page references already "
-    "present in the supplied material. Never output placeholders such as '[@ mm:ss]' or '[p. N]'. "
-    "Output only the Markdown notes."
+    "You are a careful study-note editor. Write accurate, highly readable Markdown using only facts "
+    "explicitly present in the supplied material. Never invent background, examples, definitions, "
+    "formulas, or context. If the source is short, keep the note short. "
+    "Use only the useful sections among these exact level-two headings: '## Summary', "
+    "'## Key concepts', '## Detailed notes', and '## Formulas and definitions'. Do not write a title "
+    "or any level-one heading; the application adds it. Start with a heading and omit empty sections. "
+    "Write a compact 2-5 sentence Summary. Under other sections, use short bullets with bold lead terms "
+    "when that improves scanning. Use numbered lists only for real sequences or procedures, and tables "
+    "only for genuine comparisons with consistent columns. Put mathematical notation in valid LaTeX "
+    "delimiters. Avoid repetitive points, filler conclusions, emojis, decorative symbols, and excessive "
+    "bold text. Preserve only exact timestamps or page references already present in the source. Never "
+    "output placeholders such as '[@ mm:ss]' or '[p. N]'. "
+    "If the material lists 'Available visuals' with tokens like [[FIG:1]], place the relevant tokens on "
+    "their own line at the point you discuss that visual; output each token at most once and never invent "
+    "tokens that were not listed. Output only the Markdown section body."
 )
+
+NOTE_SECTION_ORDER = (
+    "Summary",
+    "Key concepts",
+    "Detailed notes",
+    "Formulas and definitions",
+)
+NOTE_SECTION_ALIASES = {section.casefold(): section for section in NOTE_SECTION_ORDER}
 
 PLACEHOLDER_REFERENCE = re.compile(
     r"\s*\[(?:@\s*)?(?:mm:ss|p\.\s*N)\]",
@@ -68,6 +85,44 @@ def _clean_generated_markdown(markdown: str) -> str:
     cleaned = re.sub(r"^(\s*)\*\s+", r"\1- ", cleaned, flags=re.MULTILINE)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _safe_markdown_title(title: str) -> str:
+    """Keep a classified title on one plain Markdown heading line."""
+    title = re.sub(r"\s+", " ", title.splitlines()[0] if title.splitlines() else "")
+    title = title.strip().lstrip("#").strip()
+    return title or "Study notes"
+
+
+def _assemble_structured_notes(title: str, generated_parts: list[str]) -> str:
+    """Merge repeated LLM section headings into one predictable note document."""
+    collected = {section: [] for section in NOTE_SECTION_ORDER}
+
+    for raw_part in generated_parts:
+        part = _clean_generated_markdown(raw_part)
+        # Local models sometimes ignore the no-title instruction. The application
+        # owns the canonical title, so discard model-written level-one headings.
+        part = re.sub(r"^#\s+.*(?:\n+|$)", "", part, count=1).strip()
+        matches = list(re.finditer(r"^##\s+(.+?)\s*$", part, flags=re.MULTILINE))
+        if not matches:
+            if part:
+                collected["Detailed notes"].append(part)
+            continue
+
+        for index, match in enumerate(matches):
+            heading = re.sub(r"[*_`]", "", match.group(1)).strip().casefold()
+            section = NOTE_SECTION_ALIASES.get(heading, "Detailed notes")
+            start = match.end()
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(part)
+            content = part[start:end].strip()
+            if content:
+                collected[section].append(content)
+
+    document = [f"# {_safe_markdown_title(title)}"]
+    for section in NOTE_SECTION_ORDER:
+        if collected[section]:
+            document.extend([f"## {section}", "\n\n".join(collected[section])])
+    return "\n\n".join(document)
 
 CALENDAR_SYSTEM = (
     "Extract actionable calendar reminders from study material. Return JSON as "
@@ -101,6 +156,16 @@ def _extract(item: dict) -> list[dict]:
     kind = item["kind"]
 
     if kind in ("audio", "video"):
+        if kind == "video":
+            # Rewrite the stored file into a seekable progressive MP4 so the
+            # web player can jump straight to a cited timestamp instead of
+            # streaming a large lecture from the start. Rewritten in place, so
+            # the serving path is unchanged.
+            from core.video import optimize_for_streaming
+            try:
+                optimize_for_streaming(path)
+            except Exception:
+                traceback.print_exc()  # a non-optimized video still plays fine
         from core.stt import transcribe
         wav = _ffmpeg_to_wav(path)
         try:
@@ -137,8 +202,12 @@ def _extract(item: dict) -> list[dict]:
     if kind == "pdf":
         from core.ocr import extract_pdf
         return [
-            {"text": f"[p. {p['page']}] {chunk}", "page": p["page"]}
-            for p in extract_pdf(path)
+            {
+                "text": f"[p. {p['page']}] {chunk}",
+                "page": p["page"],
+                "image_path": p.get("image_path"),
+            }
+            for p in extract_pdf(path, item_id=item["id"])
             for chunk in _split(p["text"])
         ]
 
@@ -196,29 +265,79 @@ def _classify(full_text: str, filename: str) -> tuple[str, str]:
     return str(result.get("subject", "General")), str(result.get("title", "Untitled"))
 
 
-def _generate_notes(full_text: str, chunks: list[dict]) -> str:
+def _visual_caption(chunk_text: str) -> str:
+    """A short caption for a captured video frame from its chunk text."""
+    body = chunk_text.split("Visual from lecture:", 1)[-1]
+    for line in body.splitlines():
+        cleaned = re.sub(r"^[#>*\-\s]+", "", line).strip().strip("*_`")
+        if cleaned:
+            return cleaned[:120]
+    return "Lecture visual"
+
+
+def _collect_visuals(item: dict, chunks: list[dict]) -> list[dict]:
+    """Unified inline-visual manifest: captured video frames + document figures."""
+    from core import figures
+
+    visuals: list[dict] = []
+    token = 1
+    for chunk in chunks:
+        if chunk.get("frame_id") and chunk.get("ts_start") is not None:
+            visuals.append({
+                "token_id": token,
+                "url": f"/api/video/frames/{chunk['frame_id']}/image",
+                "caption": _visual_caption(chunk["text"]),
+                "anchor": ("ts", int(chunk["ts_start"])),
+            })
+            token += 1
+    try:
+        if item["kind"] == "pdf":
+            for fig in figures.extract_pdf_figures(item["stored_path"], item["id"]):
+                visuals.append({
+                    "token_id": token,
+                    "url": f"/api/doc/figures/{fig['filename']}",
+                    "caption": fig["caption"],
+                    "anchor": ("page", fig["page"]),
+                })
+                token += 1
+        elif item["kind"] == "image":
+            fig = figures.register_image_figure(item["stored_path"], item["id"])
+            if fig:
+                visuals.append({
+                    "token_id": token,
+                    "url": f"/api/doc/figures/{fig['filename']}",
+                    "caption": fig["caption"],
+                    "anchor": None,
+                })
+                token += 1
+    except Exception:
+        traceback.print_exc()  # notes must still generate without figures
+    return visuals
+
+
+def _generate_notes(full_text: str, chunks: list[dict], title: str = "Study notes",
+                    visuals: list[dict] | None = None) -> str:
+    from core.notes import build_manifest_block, place_visuals
+
+    visuals = visuals or []
+    manifest = build_manifest_block(visuals)
     sections = []
-    for i in range(0, len(full_text), NOTES_INPUT_CHARS):
+    part_count = max(1, (len(full_text) + NOTES_INPUT_CHARS - 1) // NOTES_INPUT_CHARS)
+    for part_number, i in enumerate(range(0, len(full_text), NOTES_INPUT_CHARS), start=1):
         part = full_text[i:i + NOTES_INPUT_CHARS]
-        sections.append(_clean_generated_markdown(llm.chat(NOTES_SYSTEM, part, max_tokens=1500)))
-    notes = "\n\n".join(sections)
+        prompt = (
+            f"Document title: {title}\nSource part: {part_number} of {part_count}\n\n"
+            f"Source material:\n{part}{manifest}"
+        )
+        sections.append(llm.chat(NOTES_SYSTEM, prompt, max_tokens=1800))
+    notes = _assemble_structured_notes(title, sections)
     # Keep the source material in the note as well as the LLM's study guide.
     # This is deliberately not truncated: a lecture upload must retain its
     # complete timestamped transcript for reading and RAG retrieval.
     if any(chunk.get("ts_start") is not None for chunk in chunks):
         notes += "\n\n## Complete timestamped transcript\n\n" + full_text
-    visuals = [chunk for chunk in chunks if chunk.get("frame_id")]
-    if visuals:
-        appendix = ["## Important lecture visuals"]
-        for visual in visuals:
-            label = _mmss(visual["ts_start"])
-            appendix.extend([
-                f"### Board or diagram at {label}",
-                f"![Lecture visual at {label}](/api/video/frames/{visual['frame_id']}/image)",
-                visual["text"],
-            ])
-        notes += "\n\n" + "\n\n".join(appendix)
-    return notes
+    # Visuals are placed inline at their page/timestamp anchor, never in a section.
+    return place_visuals(notes, visuals)
 
 
 def _extract_calendar_reminders(full_text: str, capture_date: str) -> list[dict]:
@@ -297,7 +416,8 @@ def process_item(item: dict):
     subject_id = db.get_or_create_subject(subject_name)
     db.set_item_meta(item["id"], title, subject_id)
 
-    notes_md = _generate_notes(full_text, chunks)
+    visuals = _collect_visuals(item, chunks)
+    notes_md = _generate_notes(full_text, chunks, title, visuals)
     db.add_note(item["id"], notes_md)
 
     source = f"{title} — {capture_date} ({item['filename']})"
@@ -320,7 +440,10 @@ def process_item(item: dict):
             "chunk_id": chunk_id, "item_id": item["id"], "subject": subject_name,
             "source_label": source + " — notes", "text": section,
         })
-    vectorstore.add_chunks(rows)
+    try:
+        vectorstore.add_chunks(rows)
+    except Exception as error:
+        raise RuntimeError(f"Vector indexing failed: {error}") from error
     db.set_status(item["id"], "done")
 
 
@@ -347,24 +470,73 @@ def _sweep_inbox():
 
 def worker_loop(stop: threading.Event | None = None):
     db.init_db()
+    logger.info("ingestion worker ready")
     while stop is None or not stop.is_set():
         try:
             _sweep_inbox()
             item = db.claim_next_pending_item()
             if item is None:
-                time.sleep(2)
+                if stop is None:
+                    time.sleep(2)
+                else:
+                    stop.wait(2)
                 continue
             try:
+                logger.info(
+                    "ingestion started",
+                    extra={"item_id": item["id"], "filename": item["filename"]},
+                )
                 process_item(item)
+                logger.info("ingestion completed", extra={"item_id": item["id"]})
             except Exception as e:
-                traceback.print_exc()
+                logger.exception("ingestion failed", extra={"item_id": item["id"]})
                 db.set_status(item["id"], "error", str(e)[:500])
         except Exception:
-            traceback.print_exc()
-            time.sleep(5)
+            logger.exception("ingestion worker iteration failed")
+            if stop is None:
+                time.sleep(5)
+            else:
+                stop.wait(5)
+    logger.info("ingestion worker stopped")
+
+
+_worker_lock = threading.Lock()
+_worker_thread: threading.Thread | None = None
+_worker_stop: threading.Event | None = None
 
 
 def start_worker() -> threading.Thread:
-    t = threading.Thread(target=worker_loop, daemon=True, name="ingest-worker")
-    t.start()
-    return t
+    """Start the process-wide ingestion worker exactly once."""
+    global _worker_thread, _worker_stop
+    with _worker_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return _worker_thread
+        _worker_stop = threading.Event()
+        _worker_thread = threading.Thread(
+            target=worker_loop,
+            args=(_worker_stop,),
+            daemon=True,
+            name="ingest-worker",
+        )
+        _worker_thread.start()
+        return _worker_thread
+
+
+def stop_worker(timeout: float = 10.0) -> None:
+    """Request a clean worker shutdown and wait for its current unit of work."""
+    global _worker_thread, _worker_stop
+    with _worker_lock:
+        thread = _worker_thread
+        stop = _worker_stop
+        if thread is None:
+            return
+        if stop is not None:
+            stop.set()
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        logger.warning("ingestion worker did not stop before timeout")
+        return
+    with _worker_lock:
+        if _worker_thread is thread:
+            _worker_thread = None
+            _worker_stop = None

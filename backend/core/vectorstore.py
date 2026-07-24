@@ -1,5 +1,10 @@
 """LanceDB chunk index: vector search with metadata filters."""
+import fcntl
+import threading
+from contextlib import contextmanager
+from datetime import timedelta
 from functools import lru_cache
+from pathlib import Path
 
 import lancedb
 import pyarrow as pa
@@ -8,6 +13,8 @@ from core.config import LANCEDB_DIR
 from core.embed import EMBED_DIM, embed
 
 TABLE = "chunks"
+_WRITE_LOCK = threading.RLock()
+_LOCK_PATH = LANCEDB_DIR / ".write.lock"
 
 SCHEMA = pa.schema([
     pa.field("chunk_id", pa.int64()),
@@ -22,12 +29,42 @@ SCHEMA = pa.schema([
 ])
 
 
+@contextmanager
+def _write_lock():
+    """Serialize LanceDB mutations across API, worker, and Telegram processes."""
+    LANCEDB_DIR.mkdir(parents=True, exist_ok=True)
+    with _WRITE_LOCK, Path(_LOCK_PATH).open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 @lru_cache(maxsize=1)
 def _table():
-    db = lancedb.connect(str(LANCEDB_DIR))
-    if TABLE in db.table_names():
-        return db.open_table(TABLE)
-    return db.create_table(TABLE, schema=SCHEMA)
+    # A zero read-consistency interval keeps cached handles current when the API
+    # and Telegram bot each run an ingestion worker against the same local DB.
+    db = lancedb.connect(
+        str(LANCEDB_DIR),
+        read_consistency_interval=timedelta(seconds=0),
+    )
+    # lru_cache can execute this function more than once during a concurrent
+    # first call. exist_ok makes table initialization atomic and idempotent.
+    with _write_lock():
+        return db.create_table(TABLE, schema=SCHEMA, exist_ok=True)
+
+
+def ensure_ready() -> None:
+    """Create or open the index without loading an embedding model."""
+    _table()
+
+
+def _id_filter(chunk_ids: list[int]) -> str:
+    ids = sorted({int(chunk_id) for chunk_id in chunk_ids})
+    if not ids:
+        raise ValueError("at least one chunk id is required")
+    return "chunk_id IN (" + ", ".join(map(str, ids)) + ")"
 
 
 def add_chunks(rows: list[dict]):
@@ -40,7 +77,26 @@ def add_chunks(rows: list[dict]):
         r.setdefault("ts_start", None)
         r.setdefault("page", None)
         r.setdefault("image_path", None)
-    _table().add(rows)
+    chunk_ids = [int(row["chunk_id"]) for row in rows]
+    table = _table()
+    with _write_lock():
+        # Retrying a completed SQLite write must not duplicate its vectors.
+        table.delete(_id_filter(chunk_ids))
+        table.add(rows)
+
+
+def delete_chunks(chunk_ids: list[int]) -> None:
+    if not chunk_ids:
+        return
+    table = _table()
+    with _write_lock():
+        table.delete(_id_filter(chunk_ids))
+
+
+def update_item_subject(item_id: int, subject: str) -> None:
+    table = _table()
+    with _write_lock():
+        table.update({"subject": subject}, where=f"item_id = {int(item_id)}")
 
 
 def search(query: str, subject: str | None = None, k: int = 8) -> list[dict]:

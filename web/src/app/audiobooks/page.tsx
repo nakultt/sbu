@@ -1,39 +1,50 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Headphones, Loader2 } from "lucide-react";
+import { CircleAlert, Headphones, Loader2 } from "lucide-react";
 import PageShell from "@/components/PageShell";
 import { API, Audiobook, getJSON, NotePreview, postJSON, timeAgo } from "@/lib/api";
+
+interface Job {
+  id: number;
+  name: string;
+  status: "processing" | "done" | "error";
+  error: string | null;
+  file: string | null;
+  created_at: number;
+}
 
 export default function AudiobooksPage() {
   const [books, setBooks] = useState<Audiobook[]>([]);
   const [notes, setNotes] = useState<NotePreview[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [picked, setPicked] = useState<number[]>([]);
-  const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(() => {
     getJSON<Audiobook[]>("/api/audiobooks").then(setBooks).catch(() => {});
     getJSON<NotePreview[]>("/api/notes?limit=50").then(setNotes).catch(() => {});
+    getJSON<Job[]>("/api/audiobooks/jobs").then(setJobs).catch(() => {});
   }, []);
 
-  useEffect(refresh, [refresh]);
+  useEffect(() => {
+    refresh();
+    const t = setInterval(refresh, 3000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const busy = jobs.some((j) => j.status === "processing");
 
   async function generate() {
-    if (!picked.length || busy) return;
-    setBusy(true);
-    try {
-      const name = notes.find((n) => n.id === picked[0])?.title ?? "audiobook";
-      await postJSON("/api/audiobooks", { note_ids: picked, name });
-      setPicked([]);
-      refresh();
-    } finally {
-      setBusy(false);
-    }
+    if (!picked.length) return;
+    const name = notes.find((n) => n.id === picked[0])?.title ?? "audiobook";
+    await postJSON("/api/audiobooks", { note_ids: picked, name });
+    setPicked([]);
+    refresh();
   }
 
   return (
     <PageShell title="Audiobooks" subtitle="Turn your notes into narrated audio with Kokoro.">
-      <div className="rounded-2xl border border-line bg-white p-5">
+      <div className="surface p-5">
         <h2 className="font-semibold">Generate from notes</h2>
         {notes.length === 0 ? (
           <p className="mt-3 text-sm text-muted">No notes yet — process some material first.</p>
@@ -57,21 +68,43 @@ export default function AudiobooksPage() {
             </div>
             <button
               onClick={generate}
-              disabled={!picked.length || busy}
-              className="mt-4 inline-flex items-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+              disabled={!picked.length}
+              className="mt-4 button-primary disabled:opacity-50"
             >
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {busy ? "Narrating… (this takes a while)" : "🎧 Generate audiobook"}
+              🎧 Generate audiobook
             </button>
           </>
         )}
       </div>
 
+      {jobs.filter((j) => j.status !== "done").length > 0 && (
+        <>
+          <h2 className="mb-3 mt-8 font-semibold">Generation queue</h2>
+          <div className="space-y-2">
+            {jobs.filter((j) => j.status !== "done").map((j) => (
+              <div key={j.id} className="flex items-center gap-3 surface px-4 py-3 text-sm">
+                {j.status === "processing" ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-brand" />
+                ) : (
+                  <CircleAlert className="h-4 w-4 text-red-500" />
+                )}
+                <span className="flex-1 truncate font-medium">{j.name}</span>
+                <span className="text-xs text-muted">
+                  {j.status === "processing"
+                    ? "Writing narration + synthesizing… this takes a few minutes"
+                    : j.error}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
       <h2 className="mb-3 mt-8 font-semibold">Your audiobooks</h2>
       <div className="space-y-3">
-        {books.length === 0 && <p className="text-sm text-muted">Nothing here yet.</p>}
+        {books.length === 0 && !busy && <p className="text-sm text-muted">Nothing here yet.</p>}
         {books.map((b) => (
-          <div key={b.name} className="rounded-2xl border border-line bg-white p-4">
+          <div key={b.name} className="surface p-4">
             <div className="flex items-center gap-3">
               <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-chip-purple">
                 <Headphones className="h-5 w-5 text-brand" />
