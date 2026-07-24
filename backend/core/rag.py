@@ -19,7 +19,7 @@ def ask(question: str, subject: str | None = None, k: int = 8) -> dict:
     hits = vectorstore.search(question, subject=subject, k=k)
     if not hits:
         return {"answer": "No notes found yet — ingest some material first.",
-                "sources": [], "images": []}
+                "sources": [], "images": [], "videos": []}
 
     context_blocks = []
     for h in hits:
@@ -40,4 +40,10 @@ def ask(question: str, subject: str | None = None, k: int = 8) -> dict:
         b.split("\n", 1)[0].removeprefix("[source: ").removesuffix("]")
         for b in context_blocks
     ))
-    return {"answer": answer, "sources": sources, "images": images}
+    videos = []
+    for h in hits:
+        if h.get("ts_start") is not None:
+            candidate = {"item_id": h["item_id"], "timestamp": h["ts_start"], "label": h["source_label"]}
+            if candidate not in videos:
+                videos.append(candidate)
+    return {"answer": answer, "sources": sources, "images": images, "videos": videos}

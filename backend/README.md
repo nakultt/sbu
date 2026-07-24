@@ -1,7 +1,8 @@
 # Study Buddy backend
 
 The Python backend contains the FastAPI service, background ingestion pipeline,
-local model integrations, Streamlit fallback UI, and macOS menu-bar capture app.
+handwriting recognition, video-board review, local model integrations,
+Streamlit fallback UI, and macOS menu-bar capture app.
 
 From this directory:
 

@@ -3,10 +3,14 @@ import tempfile
 from pathlib import Path
 
 
-def ocr_image(image_path: str) -> str:
+def ocr_image_annotations(image_path: str) -> list[tuple]:
+    """Apple Vision annotations: [(text, confidence, bbox)]."""
     from ocrmac import ocrmac
-    annotations = ocrmac.OCR(image_path, recognition_level="accurate").recognize()
-    return "\n".join(a[0] for a in annotations).strip()
+    return ocrmac.OCR(image_path, recognition_level="accurate").recognize()
+
+
+def ocr_image(image_path: str) -> str:
+    return "\n".join(a[0] for a in ocr_image_annotations(image_path)).strip()
 
 
 def extract_pdf(pdf_path: str) -> list[dict]:

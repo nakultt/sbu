@@ -4,7 +4,7 @@ import re
 
 from openai import OpenAI
 
-from core.config import LMSTUDIO_API_KEY, LMSTUDIO_BASE_URL, LMSTUDIO_MODEL
+from core.config import LMSTUDIO_API_KEY, LMSTUDIO_BASE_URL, LMSTUDIO_MODEL, VISION_MODEL
 
 _client = OpenAI(base_url=LMSTUDIO_BASE_URL, api_key=LMSTUDIO_API_KEY)
 
@@ -26,6 +26,25 @@ def chat(system: str, user: str, temperature: float = 0.3, max_tokens: int = 204
     )
     text = resp.choices[0].message.content or ""
     # strip <think> blocks some local models emit
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def chat_vision(prompt: str, images_b64: list[str], temperature: float = 0.0,
+                max_tokens: int = 256, model: str | None = None) -> str:
+    """Send a text prompt plus one or more base64 PNG images to the vision model."""
+    content: list = [{"type": "text", "text": prompt}]
+    for b64 in images_b64:
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        })
+    resp = _client.chat.completions.create(
+        model=model or VISION_MODEL,
+        messages=[{"role": "user", "content": content}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    text = resp.choices[0].message.content or ""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 

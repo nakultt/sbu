@@ -16,6 +16,8 @@ from core.config import FILES_DIR, INBOX_DIR, kind_of
 
 CHUNK_CHARS = 900
 NOTES_INPUT_CHARS = 5000
+# Apple Vision reports quantized confidences (1.0 printed, ~0.3-0.5 handwriting)
+HANDWRITING_CONF_THRESHOLD = 0.8
 
 CLASSIFY_SYSTEM = (
     "You organize study material for a student. Given content from a lecture or "
@@ -70,6 +72,12 @@ def _extract(item: dict) -> list[dict]:
                 buf, buf_start = "", None
         if buf.strip():
             chunks.append({"text": f"[@ {_mmss(buf_start)}]{buf}", "ts_start": buf_start})
+        if kind == "video":
+            try:
+                from core.video import capture_stable_frames
+                capture_stable_frames(item["id"], path)
+            except Exception:
+                traceback.print_exc()  # transcript remains useful even if board capture fails
         return chunks
 
     if kind == "pdf":
@@ -81,8 +89,24 @@ def _extract(item: dict) -> list[dict]:
         ]
 
     if kind == "image":
-        from core.ocr import ocr_image
-        text = ocr_image(path)
+        from core.ocr import ocr_image_annotations
+        try:
+            annotations = ocr_image_annotations(path)
+        except Exception:
+            annotations = []
+        text = "\n".join(a[0] for a in annotations).strip()
+        confidence = sum(a[1] for a in annotations) / len(annotations) if annotations else 0.0
+        # Low Vision confidence (or nothing found) usually means handwriting:
+        # run the personalized TrOCR pipeline instead. The page also lands in
+        # the Handwriting tab where lines can be corrected (and train the model).
+        if confidence < HANDWRITING_CONF_THRESHOLD:
+            try:
+                from core.handwriting import recognize_item_page
+                hw_text = recognize_item_page(item["id"], path)
+                if hw_text:
+                    text = hw_text
+            except Exception:
+                traceback.print_exc()  # fall back to whatever Vision found
         if not text:
             return []
         return [{"text": text, "image_path": path}]

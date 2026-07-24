@@ -15,14 +15,26 @@ STT_MODEL = os.getenv("STT_MODEL", "moonshine/base")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 KOKORO_VOICE = os.getenv("KOKORO_VOICE", "af_heart")
 
+# Handwriting is transcribed by the vision model loaded in LM Studio. Point this
+# at a specific model id if LM Studio serves several; defaults to the chat model.
+VISION_MODEL = os.getenv("VISION_MODEL", LMSTUDIO_MODEL)
+
 DATA_DIR = ROOT / os.getenv("DATA_DIR", "data")
 INBOX_DIR = ROOT / os.getenv("INBOX_DIR", "inbox")
 FILES_DIR = DATA_DIR / "files"
 LANCEDB_DIR = DATA_DIR / "lancedb"
 AUDIOBOOKS_DIR = DATA_DIR / "audiobooks"
+HANDWRITING_DIR = DATA_DIR / "handwriting"
+HW_PAGES_DIR = HANDWRITING_DIR / "pages"
+HW_CROPS_DIR = HANDWRITING_DIR / "crops"
+VIDEO_DIR = DATA_DIR / "video"
+VIDEO_FRAMES_DIR = VIDEO_DIR / "frames"
+VIDEO_CROPS_DIR = VIDEO_DIR / "crops"
 DB_PATH = DATA_DIR / "app.db"
 
-for d in (DATA_DIR, INBOX_DIR, FILES_DIR, LANCEDB_DIR, AUDIOBOOKS_DIR):
+for d in (DATA_DIR, INBOX_DIR, FILES_DIR, LANCEDB_DIR, AUDIOBOOKS_DIR,
+          HANDWRITING_DIR, HW_PAGES_DIR, HW_CROPS_DIR, VIDEO_DIR,
+          VIDEO_FRAMES_DIR, VIDEO_CROPS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"}

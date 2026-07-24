@@ -11,10 +11,12 @@ useful-moonshine-onnx
 silero-vad
 soundfile
 numpy
+Pillow
 
 # Documents & images
 pymupdf
 ocrmac
+# Handwriting is transcribed by the LM Studio vision model (see core/handwriting.py)
 
 # Text-to-speech
 kokoro>=0.9
