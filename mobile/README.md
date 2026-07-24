@@ -19,15 +19,20 @@ this responsive application for the web-only workflows:
 make frontend
 ```
 
-The debug app defaults to `http://10.0.2.2:8010`, the Android emulator alias
-for the development machine. For a physical device, pass the development
-machine's reachable LAN address when building:
+The connection fields are filled on first launch with the current laptop
+addresses, `http://100.192.1.162:8010` and
+`http://100.192.1.162:3000`. Open **ALL → Laptop connection** in the mobile UI
+to enter the laptop's current backend and web URLs. **Save & Connect** applies
+the new backend immediately and stores both addresses in Android preferences,
+so they survive app restarts and do not require rebuilding the APK.
+
+Build-time properties remain available as initial defaults for managed builds:
 
 ```bash
 ./gradlew assembleDebug -PSTUDY_BUDDY_API_URL=http://192.168.1.20:8010
 ```
 
-For a physical device, configure both services:
+For a physical device, you may configure both initial defaults:
 
 ```bash
 ./gradlew assembleDebug \

@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -95,10 +96,33 @@ fun Modifier.axClick(onClick: () -> Unit): Modifier = this.then(
 
 @Composable
 fun AxiomApp() {
+    val context = LocalContext.current
+    val connectionPreferences = remember {
+        context.getSharedPreferences("study_buddy_connection", android.content.Context.MODE_PRIVATE)
+    }
+    var apiBaseUrl by remember {
+        mutableStateOf(connectionPreferences.getString("api_base_url", com.example.mobile.BuildConfig.API_BASE_URL)
+            ?: com.example.mobile.BuildConfig.API_BASE_URL)
+    }
+    var webBaseUrl by remember {
+        mutableStateOf(connectionPreferences.getString("web_base_url", com.example.mobile.BuildConfig.WEB_BASE_URL)
+            ?: com.example.mobile.BuildConfig.WEB_BASE_URL)
+    }
     val viewModel: AxiomViewModel = viewModel()
     val backend by viewModel.data
     val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) { viewModel.refresh() }
+    LaunchedEffect(Unit) { viewModel.connect(apiBaseUrl) }
+    val saveConnection: (String, String) -> Unit = { apiUrl, webUrl ->
+        val cleanApi = normalizeServerUrl(apiUrl)
+        val cleanWeb = normalizeServerUrl(webUrl)
+        connectionPreferences.edit()
+            .putString("api_base_url", cleanApi)
+            .putString("web_base_url", cleanWeb)
+            .apply()
+        apiBaseUrl = cleanApi
+        webBaseUrl = cleanWeb
+        viewModel.connect(cleanApi)
+    }
 
     var dark by remember { mutableStateOf(true) }
     val themeT by animateFloatAsState(
@@ -182,7 +206,12 @@ fun AxiomApp() {
                             AxiomScreen.Notes -> NotesScreen(colors, backend, viewModel::refresh)
                             AxiomScreen.Cards -> CardsScreen(colors, backend, viewModel::selectDeck, viewModel::refresh)
                             AxiomScreen.Plan -> PlannerScreen(colors, backend, viewModel::toggleTask, viewModel::refresh)
-                            AxiomScreen.All -> WebWorkspaceScreen(colors)
+                            AxiomScreen.All -> WebWorkspaceScreen(
+                                colors = colors,
+                                apiBaseUrl = apiBaseUrl,
+                                webBaseUrl = webBaseUrl,
+                                onSaveConnection = saveConnection,
+                            )
                         }
                     }
                 }
@@ -191,6 +220,13 @@ fun AxiomApp() {
             }
         }
     }
+}
+
+private fun normalizeServerUrl(value: String): String {
+    val trimmed = value.trim().trimEnd('/')
+    if (trimmed.isBlank()) return trimmed
+    return if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed
+    else "http://$trimmed"
 }
 
 /** Drifting glow blobs + faint blueprint grid behind everything. */

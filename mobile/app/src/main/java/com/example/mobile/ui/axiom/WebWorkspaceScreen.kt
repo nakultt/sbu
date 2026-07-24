@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,19 +43,27 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.example.mobile.BuildConfig
 
 @Composable
-fun WebWorkspaceScreen(colors: AxiomColors) {
+fun WebWorkspaceScreen(
+    colors: AxiomColors,
+    apiBaseUrl: String,
+    webBaseUrl: String,
+    onSaveConnection: (String, String) -> Unit,
+) {
     val context = LocalContext.current
     var selected by remember { mutableStateOf<WebFeature?>(null) }
     var webView by remember { mutableStateOf<WebView?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var fileCallback by remember { mutableStateOf<ValueCallback<Array<Uri>>?>(null) }
     var mediaPermission by remember { mutableStateOf<PermissionRequest?>(null) }
+    var apiInput by remember(apiBaseUrl) { mutableStateOf(apiBaseUrl) }
+    var webInput by remember(webBaseUrl) { mutableStateOf(webBaseUrl) }
+    var connectionMessage by remember { mutableStateOf<String?>(null) }
 
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val callback = fileCallback
@@ -87,6 +96,41 @@ fun WebWorkspaceScreen(colors: AxiomColors) {
                 "Every dashboard feature uses the live web application and its backend connection.",
                 style = TextStyle(fontFamily = Sans, fontSize = 12.sp, color = colors.dim),
             )
+            Column(
+                modifier = Modifier.fillMaxWidth().border(1.dp, colors.accent).background(colors.panel).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("LAPTOP CONNECTION", style = monoLabel(10, colors.accent, 0.16f))
+                ConnectionField(
+                    colors = colors,
+                    label = "BACKEND URL",
+                    value = apiInput,
+                    placeholder = "http://100.192.1.162:8010",
+                    onValueChange = { apiInput = it; connectionMessage = null },
+                )
+                ConnectionField(
+                    colors = colors,
+                    label = "WEB URL",
+                    value = webInput,
+                    placeholder = "http://100.192.1.162:3000",
+                    onValueChange = { webInput = it; connectionMessage = null },
+                )
+                Box(
+                    modifier = Modifier.fillMaxWidth().border(1.dp, colors.accent)
+                        .axClick {
+                            if (apiInput.isBlank() || webInput.isBlank()) {
+                                connectionMessage = "Enter both laptop addresses."
+                            } else {
+                                onSaveConnection(apiInput, webInput)
+                                connectionMessage = "Saved. Reconnecting to the laptop…"
+                            }
+                        }.padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("SAVE & CONNECT", style = monoLabel(10, colors.accent, 0.16f))
+                }
+                connectionMessage?.let { Text(it, color = colors.dim, fontSize = 11.sp) }
+            }
             webFeatures.forEach { feature ->
                 Row(
                     modifier = Modifier.fillMaxWidth().border(1.dp, colors.line).background(colors.panel)
@@ -144,7 +188,7 @@ fun WebWorkspaceScreen(colors: AxiomColors) {
                     webViewClient = object : WebViewClient() {
                         override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                             val target = request?.url ?: return false
-                            val workspaceHost = Uri.parse(BuildConfig.WEB_BASE_URL).host
+                            val workspaceHost = Uri.parse(webBaseUrl).host
                             if (target.host == workspaceHost) return false
                             viewContext.startActivity(Intent(Intent.ACTION_VIEW, target))
                             return true
@@ -229,11 +273,11 @@ fun WebWorkspaceScreen(colors: AxiomColors) {
                             .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, filename)
                         (viewContext.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(download)
                     }
-                    loadUrl("${BuildConfig.WEB_BASE_URL}${feature.route}")
+                    loadUrl("$webBaseUrl${feature.route}")
                 }
             },
             update = { current ->
-                val expected = "${BuildConfig.WEB_BASE_URL}${feature.route}"
+                val expected = "$webBaseUrl${feature.route}"
                 if (current.url == null || current.url == "about:blank") current.loadUrl(expected)
             },
         )
@@ -248,6 +292,35 @@ fun WebWorkspaceScreen(colors: AxiomColors) {
             webView?.stopLoading()
             webView?.destroy()
             webView = null
+        }
+    }
+}
+
+@Composable
+private fun ConnectionField(
+    colors: AxiomColors,
+    label: String,
+    value: String,
+    placeholder: String,
+    onValueChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(label, style = monoLabel(9, colors.dim, 0.12f))
+        Box(
+            modifier = Modifier.fillMaxWidth().border(1.dp, colors.line2).background(colors.panel2)
+                .padding(horizontal = 11.dp, vertical = 10.dp),
+        ) {
+            if (value.isBlank()) {
+                Text(placeholder, color = colors.faint, fontSize = 12.sp)
+            }
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                singleLine = true,
+                textStyle = TextStyle(fontFamily = Mono, fontSize = 12.sp, color = colors.text),
+                cursorBrush = SolidColor(colors.accent),
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }

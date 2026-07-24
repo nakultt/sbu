@@ -7,7 +7,7 @@ import com.example.mobile.network.StudyBuddyApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
-class AxiomViewModel(private val api: StudyBuddyApi = StudyBuddyApi()) : ViewModel() {
+class AxiomViewModel(private var api: StudyBuddyApi = StudyBuddyApi()) : ViewModel() {
     var data = androidx.compose.runtime.mutableStateOf(MobileData())
         private set
 
@@ -37,6 +37,11 @@ class AxiomViewModel(private val api: StudyBuddyApi = StudyBuddyApi()) : ViewMod
                 fail(error)
             }
         }
+    }
+
+    fun connect(apiBaseUrl: String) {
+        api = StudyBuddyApi(apiBaseUrl)
+        refresh()
     }
 
     fun selectDeck(id: Int) {
