@@ -1,14 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Check, ChevronDown, Download, FileText, Folder, FolderInput, FolderPlus,
-  Pencil, Play, Trash2, Upload, X,
-} from "lucide-react";
-import PageShell from "@/components/PageShell";
+import { Download, FolderInput, Pencil, Play, Trash2, Upload, X } from "lucide-react";
 import NoteMarkdown from "@/components/NoteMarkdown";
 import NoteEditor from "@/components/NoteEditor";
 import VideoModal from "@/components/VideoModal";
+import { MonoLabel, GlowButton } from "@/components/ui";
 import { API, getJSON, NotePreview, shortDate, Subject } from "@/lib/api";
 import { cleanStudyMarkdown } from "@/lib/markdown";
 import { NoteContext } from "@/lib/noteLinks";
@@ -32,51 +29,55 @@ interface ImportResult {
 export default function NotesPage() {
   const [notes, setNotes] = useState<NotePreview[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
-  const [open, setOpen] = useState<number | null>(null);
-  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  const [active, setActive] = useState<number | null>(null);
   const [detail, setDetail] = useState<Record<number, string>>({});
+  const [query, setQuery] = useState("");
   const [importing, setImporting] = useState(false);
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [newFolder, setNewFolder] = useState("");
   const [busyNote, setBusyNote] = useState<number | null>(null);
   const [editing, setEditing] = useState<number | null>(null);
   const [savingNote, setSavingNote] = useState(false);
   const [videoSeek, setVideoSeek] = useState<VideoSeek | null>(null);
   const [message, setMessage] = useState("");
   const importRef = useRef<HTMLInputElement>(null);
+  const newFolderRef = useRef<HTMLInputElement>(null);
+
+  const loadDetail = useCallback(
+    async (id: number) => {
+      if (detail[id]) return;
+      const d = await getJSON<NoteDetail>(`/api/notes/${id}`);
+      setDetail((prev) => ({ ...prev, [id]: d.markdown }));
+    },
+    [detail],
+  );
 
   const refresh = useCallback(() => {
     Promise.all([
       getJSON<NotePreview[]>("/api/notes?limit=1000"),
       getJSON<Subject[]>("/api/subjects"),
-    ]).then(async ([loaded, loadedSubjects]) => {
-      setNotes(loaded);
-      setSubjects(loadedSubjects);
-      const requested = Number(new URLSearchParams(window.location.search).get("note"));
-      const requestedNote = loaded.find((note) => note.id === requested);
-      if (requested > 0 && requestedNote) {
-        setOpenFolders((current) => new Set(current).add(
-          requestedNote.subject_id == null ? "unfiled" : `subject-${requestedNote.subject_id}`
-        ));
-        setOpen(requested);
-        const note = await getJSON<NoteDetail>(`/api/notes/${requested}`);
-        setDetail((previous) => ({ ...previous, [requested]: note.markdown }));
-        window.setTimeout(() => document.getElementById(`note-${requested}`)?.scrollIntoView({
-          behavior: "smooth", block: "start",
-        }), 0);
-      }
-    }).catch(() => {});
-  }, []);
+    ])
+      .then(async ([loaded, loadedSubjects]) => {
+        setNotes(loaded);
+        setSubjects(loadedSubjects);
+        const requested = Number(new URLSearchParams(window.location.search).get("note"));
+        const requestedNote = loaded.find((note) => note.id === requested);
+        if (requested > 0 && requestedNote) {
+          setActive(requested);
+          const note = await getJSON<NoteDetail>(`/api/notes/${requested}`);
+          setDetail((previous) => ({ ...previous, [requested]: note.markdown }));
+        } else if (loaded.length > 0) {
+          setActive((cur) => cur ?? loaded[0].id);
+          loadDetail(loaded[0].id).catch(() => {});
+        }
+      })
+      .catch(() => {});
+  }, [loadDetail]);
 
   useEffect(refresh, [refresh]);
 
-  async function toggle(id: number) {
-    if (open === id) return setOpen(null);
-    setOpen(id);
-    if (!detail[id]) {
-      const d = await getJSON<NoteDetail>(`/api/notes/${id}`);
-      setDetail((prev) => ({ ...prev, [id]: d.markdown }));
-    }
+  function select(id: number) {
+    setActive(id);
+    setEditing(null);
+    loadDetail(id).catch(() => {});
   }
 
   async function importBackup(file: File) {
@@ -89,9 +90,11 @@ export default function NotesPage() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.detail ?? "Import failed");
       const result = body as ImportResult;
-      setMessage(`Imported ${result.imported} note${result.imported === 1 ? "" : "s"}${
-        result.skipped ? `; skipped ${result.skipped} already present or empty` : ""
-      }.`);
+      setMessage(
+        `Imported ${result.imported} note${result.imported === 1 ? "" : "s"}${
+          result.skipped ? `; skipped ${result.skipped} already present or empty` : ""
+        }.`,
+      );
       refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Import failed");
@@ -102,7 +105,7 @@ export default function NotesPage() {
   }
 
   async function createFolder() {
-    const name = newFolder.trim();
+    const name = newFolderRef.current?.value.trim();
     if (!name) return;
     setMessage("");
     try {
@@ -114,13 +117,13 @@ export default function NotesPage() {
       const body = await res.json();
       if (!res.ok) throw new Error(body.detail ?? "Could not create folder");
       const subject = body as Subject;
-      setSubjects((current) => current.some((entry) => entry.id === subject.id)
-        ? current
-        : [...current, subject].sort((a, b) => a.name.localeCompare(b.name)));
-      setOpenFolders((current) => new Set(current).add(`subject-${subject.id}`));
-      setNewFolder("");
-      setCreatingFolder(false);
-      setMessage(`Created “${subject.name}”.`);
+      setSubjects((current) =>
+        current.some((entry) => entry.id === subject.id)
+          ? current
+          : [...current, subject].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      if (newFolderRef.current) newFolderRef.current.value = "";
+      setMessage(`Created "${subject.name}".`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not create folder");
     }
@@ -139,11 +142,12 @@ export default function NotesPage() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.detail ?? "Could not move note");
-      setNotes((current) => current.map((entry) => entry.id === note.id
-        ? { ...entry, subject_id: subject.id, subject: subject.name }
-        : entry));
-      setOpenFolders((current) => new Set(current).add(`subject-${subject.id}`));
-      setMessage(`Moved “${note.title ?? "Untitled"}” to ${subject.name}.`);
+      setNotes((current) =>
+        current.map((entry) =>
+          entry.id === note.id ? { ...entry, subject_id: subject.id, subject: subject.name } : entry,
+        ),
+      );
+      setMessage(`Moved "${note.title ?? "Untitled"}" to ${subject.name}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not move note");
     } finally {
@@ -152,9 +156,12 @@ export default function NotesPage() {
   }
 
   async function deleteNote(note: NotePreview) {
-    if (!window.confirm(
-      `Delete “${note.title ?? "Untitled"}”? The original uploaded material will stay in your Library.`
-    )) return;
+    if (
+      !window.confirm(
+        `Delete "${note.title ?? "Untitled"}"? The original uploaded material will stay in your Library.`,
+      )
+    )
+      return;
     setBusyNote(note.id);
     setMessage("");
     try {
@@ -167,8 +174,8 @@ export default function NotesPage() {
         delete next[note.id];
         return next;
       });
-      if (open === note.id) setOpen(null);
-      setMessage(`Deleted “${note.title ?? "Untitled"}”.`);
+      if (active === note.id) setActive(null);
+      setMessage(`Deleted "${note.title ?? "Untitled"}".`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not delete note");
     } finally {
@@ -177,11 +184,8 @@ export default function NotesPage() {
   }
 
   async function startEdit(note: NotePreview) {
-    if (open !== note.id) setOpen(note.id);
-    if (!detail[note.id]) {
-      const d = await getJSON<NoteDetail>(`/api/notes/${note.id}`);
-      setDetail((prev) => ({ ...prev, [note.id]: d.markdown }));
-    }
+    setActive(note.id);
+    await loadDetail(note.id);
     setEditing(note.id);
   }
 
@@ -198,7 +202,7 @@ export default function NotesPage() {
       if (!res.ok) throw new Error(body.detail ?? "Could not save note");
       setDetail((prev) => ({ ...prev, [note.id]: body.markdown }));
       setEditing(null);
-      setMessage(`Saved “${note.title ?? "Untitled"}”.`);
+      setMessage(`Saved "${note.title ?? "Untitled"}".`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not save note");
     } finally {
@@ -206,238 +210,315 @@ export default function NotesPage() {
     }
   }
 
-  function toggleFolder(key: string) {
-    setOpenFolders((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
   function noteContext(n: NotePreview): NoteContext {
     return { itemId: n.item_id, kind: n.kind, title: n.title ?? "Note", subjectName: n.subject };
   }
 
-  const folders = [
-    ...subjects.map((subject) => ({
-      key: `subject-${subject.id}`,
-      id: subject.id,
-      name: subject.name,
-      notes: notes.filter((note) => note.subject_id === subject.id),
-    })),
-    ...(notes.some((note) => note.subject_id == null) ? [{
-      key: "unfiled",
-      id: null,
-      name: "Unfiled",
-      notes: notes.filter((note) => note.subject_id == null),
-    }] : []),
-  ];
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? notes.filter(
+        (n) =>
+          (n.title ?? "").toLowerCase().includes(q) || n.preview.toLowerCase().includes(q),
+      )
+    : notes;
+  const activeNote = notes.find((n) => n.id === active) ?? null;
 
   return (
-    <PageShell title="Notes" subtitle="Generated study notes, organised by subject.">
-      <div className="mb-5 flex flex-wrap items-center gap-2">
-        <a
-          href={`${API}/api/notes/export`}
-          className="button-primary"
-        >
-          <Download className="h-4 w-4" />
-          Export all notes
-        </a>
-        <button
-          onClick={() => importRef.current?.click()}
-          disabled={importing}
-          className="button-secondary disabled:opacity-60"
-        >
-          <Upload className="h-4 w-4" />
-          {importing ? "Importing…" : "Import notes"}
-        </button>
-        <button
-          onClick={() => setCreatingFolder((current) => !current)}
-          className="button-secondary"
-          aria-expanded={creatingFolder}
-        >
-          <FolderPlus className="h-4 w-4" />
-          New folder
-        </button>
-        <input
-          ref={importRef}
-          type="file"
-          accept="application/json,text/markdown,.json,.md,.markdown,.txt"
-          hidden
-          onChange={(event) => event.target.files?.[0] && importBackup(event.target.files[0])}
-        />
-        <span className="text-xs text-muted">Import a JSON backup or an individual Markdown note.</span>
-      </div>
-      {creatingFolder && (
-        <form
-          className="mb-4"
-          onSubmit={(event) => { event.preventDefault(); createFolder(); }}
-        >
-          <div className="flex max-w-xl items-center gap-2 rounded-xl border border-line bg-panel p-2">
-            <Folder className="ml-2 h-4 w-4 shrink-0 text-brand" />
-            <input
-              className="min-w-0 flex-1 bg-transparent px-1 py-1.5 text-sm outline-none"
-              value={newFolder}
-              onChange={(event) => setNewFolder(event.target.value)}
-              placeholder="Folder name, e.g. Computer Science"
-              maxLength={80}
-              autoFocus
-            />
-            <button className="rounded-lg bg-brand p-2 text-white disabled:opacity-50" disabled={!newFolder.trim()} aria-label="Create folder">
-              <Check className="h-4 w-4" />
-            </button>
-            <button type="button" onClick={() => { setCreatingFolder(false); setNewFolder(""); }} className="rounded-lg p-2 text-muted hover:bg-panel-muted" aria-label="Cancel folder creation">
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-        </form>
-      )}
-      {message && (
-        <p className="mb-4 rounded-xl border border-line bg-panel px-4 py-3 text-sm" role="status">
-          {message}
-        </p>
-      )}
-      <div className="space-y-3">
-        {notes.length === 0 && (
-          <p className="text-sm text-muted">No notes yet — upload material on the Files page.</p>
-        )}
-        {folders.map((folder) => (
-          <section key={folder.key} className="surface overflow-hidden">
-            <button
-              onClick={() => toggleFolder(folder.key)}
-              className="flex w-full items-center gap-3 p-4 text-left sm:px-5"
-              aria-expanded={openFolders.has(folder.key)}
-              aria-controls={`folder-content-${folder.key}`}
+    <section className="axscreen" style={{ display: "flex", height: "calc(100vh - 60px)", minHeight: 0 }}>
+      {/* List rail */}
+      <div
+        style={{
+          width: 288,
+          flexShrink: 0,
+          borderRight: "1px solid var(--line)",
+          background: "var(--panel)",
+          backdropFilter: "var(--blur)",
+          WebkitBackdropFilter: "var(--blur)",
+          display: "flex",
+          flexDirection: "column",
+          minHeight: 0,
+        }}
+      >
+        <div style={{ padding: 16, borderBottom: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 10 }}>
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search notes…"
+            style={{
+              width: "100%",
+              background: "var(--panel2)",
+              border: "1px solid var(--line)",
+              color: "var(--text)",
+              padding: "8px 12px",
+              fontFamily: "var(--font-jetbrains-mono), monospace",
+              fontSize: 11,
+              outline: "none",
+            }}
+          />
+          <div style={{ display: "flex", gap: 8 }}>
+            <a href={`${API}/api/notes/export`} style={{ flex: 1 }}>
+              <GlowButton variant="ghost" style={{ width: "100%", padding: "7px 0", fontSize: 9 }}>
+                <Download className="h-3.5 w-3.5" /> EXPORT
+              </GlowButton>
+            </a>
+            <GlowButton
+              variant="ghost"
+              onClick={() => importRef.current?.click()}
+              disabled={importing}
+              style={{ flex: 1, padding: "7px 0", fontSize: 9 }}
             >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-chip-purple text-brand">
-                <Folder className="h-5 w-5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-semibold">{folder.name}</span>
-                <span className="text-xs text-muted">{folder.notes.length} note{folder.notes.length === 1 ? "" : "s"}</span>
-              </span>
-              <ChevronDown className={`h-4 w-4 text-muted transition-transform ${openFolders.has(folder.key) ? "rotate-180" : ""}`} />
+              <Upload className="h-3.5 w-3.5" /> {importing ? "…" : "IMPORT"}
+            </GlowButton>
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              createFolder();
+            }}
+            style={{ display: "flex", gap: 6 }}
+          >
+            <input
+              ref={newFolderRef}
+              placeholder="New folder…"
+              maxLength={80}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                background: "var(--panel2)",
+                border: "1px solid var(--line)",
+                color: "var(--text)",
+                padding: "6px 10px",
+                fontFamily: "var(--font-jetbrains-mono), monospace",
+                fontSize: 10,
+                outline: "none",
+              }}
+            />
+            <button
+              type="submit"
+              aria-label="Create folder"
+              style={{
+                width: 30,
+                border: "1px solid var(--accent)",
+                color: "var(--accent)",
+                display: "grid",
+                placeItems: "center",
+                fontSize: 15,
+                background: "transparent",
+              }}
+            >
+              +
             </button>
-            {openFolders.has(folder.key) && (
-              <div
-                id={`folder-content-${folder.key}`}
-                className="border-t border-line bg-page/35"
-              >
-                <div className="space-y-2 p-3 sm:p-4">
-                  {folder.notes.length === 0 && (
-                    <p className="px-2 py-4 text-sm text-muted">This folder is empty. Move a note here using its folder menu.</p>
-                  )}
-                  {folder.notes.map((n) => (
-                    <div
-                      id={`note-${n.id}`}
-                      key={n.id}
-                      className="scroll-mt-20 overflow-hidden rounded-xl border border-line bg-panel"
+          </form>
+          <input
+            ref={importRef}
+            type="file"
+            accept="application/json,text/markdown,.json,.md,.markdown,.txt"
+            hidden
+            onChange={(event) => event.target.files?.[0] && importBackup(event.target.files[0])}
+          />
+        </div>
+        <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
+          {visible.length === 0 ? (
+            <div style={{ padding: 16, fontSize: 12, color: "var(--dim)" }}>
+              {notes.length === 0 ? "No notes yet — upload material on the Library page." : "No matches."}
+            </div>
+          ) : (
+            visible.map((n) => {
+              const on = n.id === active;
+              return (
+                <button
+                  key={n.id}
+                  onClick={() => select(n.id)}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "14px 16px",
+                    borderBottom: "1px solid var(--line)",
+                    borderLeft: `2px solid ${on ? "var(--accent)" : "transparent"}`,
+                    background: on ? "var(--panel2)" : "transparent",
+                  }}
+                >
+                  <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 5, color: "var(--text)" }}>
+                    {n.title ?? "Untitled"}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--dim)",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                  >
+                    {cleanStudyMarkdown(n.preview)}
+                  </div>
+                  <MonoLabel size={9} spacing="0.14em" dim style={{ marginTop: 7, display: "block" }}>
+                    {(n.subject ?? "UNFILED").toUpperCase()} · {shortDate(n.created_at).toUpperCase()}
+                  </MonoLabel>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+
+      {/* Reader */}
+      <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {message && (
+          <p
+            role="status"
+            style={{ margin: 0, padding: "10px 40px", borderBottom: "1px solid var(--line)", fontSize: 13, color: "var(--dim)" }}
+          >
+            {message}
+          </p>
+        )}
+        {!activeNote ? (
+          <div style={{ padding: 40, color: "var(--dim)", fontSize: 14 }}>Select a note to read it.</div>
+        ) : (
+          <>
+            <div style={{ padding: "28px 40px 0" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+                <div>
+                  <MonoLabel size={10} spacing="0.22em" style={{ color: "var(--accent)", display: "block", marginBottom: 10 }}>
+                    {(activeNote.subject ?? "UNFILED").toUpperCase()} · {shortDate(activeNote.created_at).toUpperCase()}
+                  </MonoLabel>
+                  <h1 style={{ margin: "0 0 6px", fontSize: 26, fontWeight: 500 }}>{activeNote.title ?? "Untitled"}</h1>
+                </div>
+                {/* Actions */}
+                <div style={{ display: "flex", alignItems: "center", gap: 2, flexShrink: 0 }}>
+                  {editing === activeNote.id ? (
+                    <button
+                      onClick={() => setEditing(null)}
+                      style={{ padding: 8, color: "var(--dim)" }}
+                      aria-label="Cancel edit"
                     >
-                      <div className="flex items-center">
-                        <button
-                          onClick={() => toggle(n.id)}
-                          className="flex min-w-0 flex-1 items-center gap-3 p-3 text-left sm:p-4"
-                          aria-expanded={open === n.id}
-                          aria-controls={`note-content-${n.id}`}
-                        >
-                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-chip-purple">
-                            <FileText className="h-4.5 w-4.5 text-brand" />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-semibold">{n.title ?? "Untitled"}</span>
-                            <span className="block truncate text-[13px] text-muted">{cleanStudyMarkdown(n.preview)}…</span>
-                          </span>
-                          <span className="hidden text-xs text-muted md:block">{shortDate(n.created_at)}</span>
-                          <ChevronDown className={`h-4 w-4 shrink-0 text-muted transition-transform ${open === n.id ? "rotate-180" : ""}`} />
-                        </button>
-                        <div className="mr-2 flex shrink-0 items-center gap-0.5 sm:mr-3">
-                          <button
-                            onClick={() => startEdit(n)}
-                            disabled={busyNote === n.id}
-                            className="rounded-lg p-2 text-muted hover:bg-brand-soft hover:text-brand disabled:opacity-50"
-                            aria-label={`Edit ${n.title ?? "note"}`}
-                            title="Edit note"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <label className="relative flex items-center rounded-lg text-muted hover:bg-brand-soft hover:text-brand" title="Move to folder">
-                            <FolderInput className="pointer-events-none absolute left-2 h-4 w-4" />
-                            <select
-                              value=""
-                              onChange={(event) => moveNote(n, Number(event.target.value))}
-                              disabled={busyNote === n.id}
-                              className="h-8 w-8 cursor-pointer appearance-none rounded-lg bg-transparent pl-8 text-transparent outline-none sm:w-[6.4rem] sm:pr-2 sm:text-xs sm:text-current"
-                              aria-label={`Move ${n.title ?? "note"} to folder`}
-                            >
-                              <option value="" disabled>Move…</option>
-                              {subjects.map((subject) => (
-                                <option key={subject.id} value={subject.id} disabled={subject.id === n.subject_id}>{subject.name}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <a
-                            href={`${API}/api/notes/${n.id}/download`}
-                            className="rounded-lg p-2 text-muted hover:bg-brand-soft hover:text-brand"
-                            aria-label={`Download ${n.title ?? "note"} as Markdown`}
-                            title="Download as Markdown"
-                          >
-                            <Download className="h-4 w-4" />
-                          </a>
-                          <button
-                            onClick={() => deleteNote(n)}
-                            disabled={busyNote === n.id}
-                            className="rounded-lg p-2 text-muted hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
-                            aria-label={`Delete ${n.title ?? "note"}`}
-                            title="Delete note"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </div>
-                      {open === n.id && (
-                        <div
-                          id={`note-content-${n.id}`}
-                          className="border-t border-line bg-page/35 px-5 py-5 sm:px-7 sm:py-7"
-                        >
-                          {n.kind === "video" && editing !== n.id && <div className="not-prose mb-5 rounded-xl bg-black p-2"><div className="mb-2 flex items-center gap-2 px-2 text-sm font-medium text-white"><Play className="h-4 w-4" />Lecture video</div><video controls className="max-h-[65vh] w-full rounded-lg" src={`${API}/api/video/items/${n.item_id}/file`} /></div>}
-                          {detail[n.id] ? (
-                            editing === n.id ? (
-                              <NoteEditor
-                                initialMarkdown={detail[n.id]}
-                                ctx={noteContext(n)}
-                                saving={savingNote}
-                                onSave={(markdown) => saveNote(n, markdown)}
-                                onCancel={() => setEditing(null)}
-                              />
-                            ) : (
-                              <article className="study-note mx-auto max-w-4xl">
-                                <NoteMarkdown
-                                  markdown={detail[n.id]}
-                                  ctx={noteContext(n)}
-                                  onSeek={(seconds) => setVideoSeek({
-                                    src: `${API}/api/video/items/${n.item_id}/file`,
-                                    timestamp: seconds,
-                                    label: n.title ?? "Lecture",
-                                  })}
-                                />
-                              </article>
-                            )
-                          ) : (
-                            <div className="note-loading mx-auto max-w-4xl" aria-label="Loading note" role="status">
-                              <span /><span /><span />
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                      <X className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => startEdit(activeNote)}
+                      disabled={busyNote === activeNote.id}
+                      style={{ padding: 8, color: "var(--dim)" }}
+                      aria-label="Edit note"
+                      title="Edit"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                  )}
+                  <label
+                    style={{ position: "relative", display: "flex", alignItems: "center", color: "var(--dim)" }}
+                    title="Move to folder"
+                  >
+                    <FolderInput className="pointer-events-none absolute left-2 h-4 w-4" />
+                    <select
+                      value=""
+                      onChange={(e) => moveNote(activeNote, Number(e.target.value))}
+                      disabled={busyNote === activeNote.id}
+                      aria-label="Move note to folder"
+                      style={{
+                        appearance: "none",
+                        background: "transparent",
+                        border: "none",
+                        color: "var(--dim)",
+                        paddingLeft: 28,
+                        paddingRight: 8,
+                        height: 32,
+                        fontSize: 12,
+                        outline: "none",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="" disabled>
+                        Move…
+                      </option>
+                      {subjects.map((subject) => (
+                        <option key={subject.id} value={subject.id} disabled={subject.id === activeNote.subject_id}>
+                          {subject.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <a
+                    href={`${API}/api/notes/${activeNote.id}/download`}
+                    style={{ padding: 8, color: "var(--dim)" }}
+                    aria-label="Download as Markdown"
+                    title="Download"
+                  >
+                    <Download className="h-4 w-4" />
+                  </a>
+                  <button
+                    onClick={() => deleteNote(activeNote)}
+                    disabled={busyNote === activeNote.id}
+                    style={{ padding: 8, color: "var(--dim)" }}
+                    aria-label="Delete note"
+                    title="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
                 </div>
               </div>
-            )}
-          </section>
-        ))}
+              {activeNote.subject ? (
+                <div style={{ display: "flex", gap: 8, margin: "12px 0 20px" }}>
+                  <MonoLabel size={10} spacing="0.12em" style={{ border: "1px solid var(--line2)", padding: "4px 10px" }}>
+                    {activeNote.subject.toUpperCase()}
+                  </MonoLabel>
+                </div>
+              ) : (
+                <div style={{ height: 20 }} />
+              )}
+              <div style={{ height: 1, background: "var(--line)" }} />
+            </div>
+
+            <div style={{ padding: "24px 40px 48px", overflow: "auto", flex: 1, minHeight: 0 }}>
+              {activeNote.kind === "video" && editing !== activeNote.id && (
+                <div className="not-prose" style={{ marginBottom: 20, background: "#000", padding: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 8px 8px", color: "#fff", fontSize: 13 }}>
+                    <Play className="h-4 w-4" /> Lecture video
+                  </div>
+                  <video
+                    controls
+                    style={{ maxHeight: "65vh", width: "100%" }}
+                    src={`${API}/api/video/items/${activeNote.item_id}/file`}
+                  />
+                </div>
+              )}
+              {detail[activeNote.id] ? (
+                editing === activeNote.id ? (
+                  <NoteEditor
+                    initialMarkdown={detail[activeNote.id]}
+                    ctx={noteContext(activeNote)}
+                    saving={savingNote}
+                    onSave={(markdown) => saveNote(activeNote, markdown)}
+                    onCancel={() => setEditing(null)}
+                  />
+                ) : (
+                  <article className="study-note" style={{ maxWidth: 760 }}>
+                    <NoteMarkdown
+                      markdown={detail[activeNote.id]}
+                      ctx={noteContext(activeNote)}
+                      onSeek={(seconds) =>
+                        setVideoSeek({
+                          src: `${API}/api/video/items/${activeNote.item_id}/file`,
+                          timestamp: seconds,
+                          label: activeNote.title ?? "Lecture",
+                        })
+                      }
+                    />
+                  </article>
+                )
+              ) : (
+                <div className="note-loading" style={{ maxWidth: 760 }} aria-label="Loading note" role="status">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
+
       {videoSeek && (
         <VideoModal
           src={videoSeek.src}
@@ -446,6 +527,6 @@ export default function NotesPage() {
           onClose={() => setVideoSeek(null)}
         />
       )}
-    </PageShell>
+    </section>
   );
 }

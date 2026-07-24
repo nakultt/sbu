@@ -2,8 +2,9 @@
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import { MonoLabel } from "@/components/ui";
 
-const DAYS = ["S", "M", "T", "W", "T", "F", "S"];
+const DAYS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
 export interface GoogleCalendarEvent {
   id: string;
@@ -54,53 +55,74 @@ export default function CalendarWidget({
   }, {});
 
   return (
-    <div className="surface p-4 sm:p-5">
-      <div className="mb-4 flex items-center justify-between">
-        <div className="font-semibold">
-          {visibleMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
-        </div>
-        <div className="flex gap-1">
+    <div style={{ border: "1px solid var(--line)", background: "var(--panel)", backdropFilter: "var(--blur)", WebkitBackdropFilter: "var(--blur)" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid var(--line)" }}>
+        <MonoLabel size={12} spacing="0.16em">
+          {visibleMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" }).toUpperCase()}
+        </MonoLabel>
+        <div style={{ display: "flex", gap: 4 }}>
           <button
             onClick={() => changeMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1))}
-            className="rounded-lg p-1.5 text-muted hover:bg-panel-muted hover:text-ink"
+            style={{ padding: 6, color: "var(--dim)" }}
             aria-label="Previous month"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
           <button
             onClick={() => changeMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1))}
-            className="rounded-lg p-1.5 text-muted hover:bg-panel-muted hover:text-ink"
+            style={{ padding: 6, color: "var(--dim)" }}
             aria-label="Next month"
           >
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
       </div>
-      <div className="grid grid-cols-7 gap-y-2 text-center text-sm">
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 1, background: "var(--line)", borderTop: "1px solid var(--line)" }}>
         {DAYS.map((day, index) => (
-          <div key={index} className="text-xs font-medium text-muted">{day}</div>
+          <div key={index} style={{ background: "var(--panel)", padding: "8px 0", textAlign: "center" }}>
+            <MonoLabel size={9} spacing="0.12em" dim>
+              {day}
+            </MonoLabel>
+          </div>
         ))}
         {cells.map((cell) => {
           const current = cell.getMonth() === visibleMonth.getMonth();
           const today = dateKey(cell) === dateKey(now);
           const count = eventCounts[dateKey(cell)] ?? 0;
           return (
-            <div key={dateKey(cell)} className="flex justify-center py-0.5">
+            <div
+              key={dateKey(cell)}
+              title={count ? `${count} Google Calendar event${count === 1 ? "" : "s"}` : undefined}
+              style={{
+                background: today ? "var(--panel2)" : "var(--panel)",
+                minHeight: 56,
+                padding: 8,
+                borderLeft: today ? "2px solid var(--accent)" : "2px solid transparent",
+                position: "relative",
+              }}
+            >
               <span
-                className={`relative flex h-9 w-9 items-center justify-center rounded-full ${
-                  today
-                    ? "bg-brand font-semibold text-white"
-                    : current
-                      ? "text-ink"
-                      : "text-muted/50"
-                }`}
-                title={count ? `${count} Google Calendar event${count === 1 ? "" : "s"}` : undefined}
+                style={{
+                  fontFamily: "var(--font-jetbrains-mono), monospace",
+                  fontSize: 12,
+                  color: today ? "var(--accent)" : current ? "var(--text)" : "var(--faint)",
+                }}
               >
-                {cell.getDate()}
-                {count > 0 && (
-                  <span className={`absolute bottom-0.5 h-1.5 w-1.5 rounded-full ${today ? "bg-panel" : "bg-brand"}`} />
-                )}
+                {String(cell.getDate()).padStart(2, "0")}
               </span>
+              {count > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    bottom: 8,
+                    right: 8,
+                    width: 5,
+                    height: 5,
+                    borderRadius: "50%",
+                    background: "var(--accent)",
+                  }}
+                />
+              )}
             </div>
           );
         })}

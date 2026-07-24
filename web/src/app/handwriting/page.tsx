@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CircleAlert, Loader2, PenLine, Send, Sparkles, Upload } from "lucide-react";
-import PageShell from "@/components/PageShell";
+import { Check, CircleAlert, Loader2, PenLine, Send, Upload } from "lucide-react";
+import { Panel, MonoLabel, GlowButton } from "@/components/ui";
 import { API, getJSON, HwLine, HwPage, HwPageDetail, HwStatus, postJSON, timeAgo } from "@/lib/api";
 
 function LineEditor({ line, onSaved }: { line: HwLine; onSaved: () => void }) {
@@ -12,7 +12,6 @@ function LineEditor({ line, onSaved }: { line: HwLine; onSaved: () => void }) {
 
   async function save() {
     const trimmed = text.trim();
-    // no-op when the text still matches the model's prediction and was never corrected
     if (!corrected && trimmed === line.pred_text.trim()) return;
     await fetch(`${API}/api/handwriting/lines/${line.id}`, {
       method: "PATCH",
@@ -25,31 +24,31 @@ function LineEditor({ line, onSaved }: { line: HwLine; onSaved: () => void }) {
   }
 
   return (
-    <div className="surface p-3">
+    <Panel style={{ padding: 12 }}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={`${API}${line.crop_url}`}
         alt={`Handwritten line ${line.line_index + 1}`}
-        className="max-h-24 w-full rounded-lg border border-line bg-page object-contain"
+        style={{ maxHeight: 96, width: "100%", border: "1px solid var(--line)", background: "var(--panel2)", objectFit: "contain" }}
       />
-      <div className="mt-2 flex items-center gap-2">
+      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
         <input
           value={text}
           onChange={(e) => setText(e.target.value)}
           onBlur={save}
           onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
           placeholder="(empty — type what this line says)"
-          className="flex-1 rounded-xl border border-line px-3 py-2 text-sm focus:border-brand focus:outline-none"
+          style={{ flex: 1, background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--text)", padding: "8px 12px", fontSize: 14, outline: "none" }}
         />
         {saved ? (
-          <Check className="h-4 w-4 shrink-0 text-emerald-500" />
+          <Check className="h-4 w-4 shrink-0" style={{ color: "var(--accent)" }} />
         ) : corrected ? (
-          <span className="shrink-0 rounded-full bg-chip-green px-2 py-0.5 text-[11px] font-medium text-emerald-600">
-            corrected
-          </span>
+          <MonoLabel size={9} spacing="0.12em" style={{ color: "var(--accent)", border: "1px solid var(--line2)", padding: "3px 7px", flexShrink: 0 }}>
+            CORRECTED
+          </MonoLabel>
         ) : null}
       </div>
-    </div>
+    </Panel>
   );
 }
 
@@ -76,13 +75,10 @@ export default function HandwritingPage() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  useEffect(() => {
-    if (selected !== null) loadDetail(selected);
-  }, [selected, loadDetail]);
-
   function selectPage(id: number) {
     setSentToNotes(false);
     setSelected(id);
+    loadDetail(id);
   }
 
   // keep polling the open page while it is still being recognized
@@ -111,126 +107,126 @@ export default function HandwritingPage() {
   const corrected = status?.corrected_lines ?? 0;
 
   return (
-    <PageShell
-      title="Handwriting"
-      subtitle="Read handwritten pages with your local vision model — correct a line and it learns your words."
-    >
-      <div className="grid gap-6 lg:grid-cols-[320px_1fr]">
-        <div className="space-y-4">
-          <div className="surface p-5">
-            <h2 className="font-semibold">Upload a page</h2>
-            <p className="mt-1 text-xs text-muted">
+    <section className="axscreen" style={{ padding: 32, display: "flex", flexDirection: "column", gap: 20, maxWidth: 1120 }}>
+      <div>
+        <MonoLabel size={11} spacing="0.24em" style={{ color: "var(--accent)", display: "block", marginBottom: 8 }}>
+          RECOGNITION
+        </MonoLabel>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 500 }}>Handwriting</h1>
+        <p style={{ margin: "8px 0 0", color: "var(--dim)", fontSize: 14 }}>
+          Read handwritten pages with your local vision model — correct a line and it learns your words.
+        </p>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "320px minmax(0, 1fr)", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Panel style={{ padding: 18 }}>
+            <MonoLabel style={{ display: "block", marginBottom: 6 }}>UPLOAD A PAGE</MonoLabel>
+            <p style={{ margin: "0 0 12px", fontSize: 12, color: "var(--dim)" }}>
               Photos or scans of handwritten notes (multi-line pages are fine).
             </p>
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              multiple
-              hidden
-              onChange={(e) => upload(e.target.files)}
-            />
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-brand px-4 py-2.5 text-sm font-medium text-white"
-            >
-              <Upload className="h-4 w-4" /> Choose images
-            </button>
-          </div>
+            <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => upload(e.target.files)} />
+            <GlowButton onClick={() => fileRef.current?.click()} style={{ width: "100%" }}>
+              <Upload className="h-4 w-4" /> CHOOSE IMAGES
+            </GlowButton>
+          </Panel>
 
-          <div className="surface p-5">
-            <h2 className="flex items-center gap-2 font-semibold">
-              <Sparkles className="h-4 w-4 text-brand" /> Learns your words
-            </h2>
-            <p className="mt-2 text-xs leading-relaxed text-muted">
-              Every line you correct is remembered and passed to the vision model
-              as a hint on the next page, so it resolves your ambiguous words
-              toward what you actually write.
+          <Panel style={{ padding: 18 }}>
+            <MonoLabel style={{ display: "block", marginBottom: 8 }}>LEARNS YOUR WORDS</MonoLabel>
+            <p style={{ margin: 0, fontSize: 12, color: "var(--dim)", lineHeight: 1.6 }}>
+              Every line you correct is remembered and passed to the vision model as a hint on the next page.
             </p>
-            <div className="mt-3 rounded-xl bg-brand-soft px-3 py-2 text-sm font-medium text-brand">
+            <div style={{ marginTop: 12, border: "1px solid var(--line2)", padding: "8px 12px", fontSize: 13, color: "var(--accent)" }}>
               {corrected} corrected line{corrected === 1 ? "" : "s"} learned
             </div>
-          </div>
+          </Panel>
 
-          <div className="surface p-3">
-            <h2 className="px-2 pt-1 text-sm font-semibold">Pages</h2>
-            <div className="mt-2 max-h-96 space-y-1 overflow-y-auto">
-              {pages.length === 0 && (
-                <p className="px-2 pb-2 text-xs text-muted">No pages yet.</p>
-              )}
-              {pages.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => selectPage(p.id)}
-                  className={`flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm ${
-                    selected === p.id ? "bg-brand-soft text-brand" : "hover:bg-panel-muted"
-                  }`}
-                >
-                  {p.status === "processing" ? (
-                    <Loader2 className="h-4 w-4 shrink-0 animate-spin text-brand" />
-                  ) : p.status === "error" ? (
-                    <CircleAlert className="h-4 w-4 shrink-0 text-red-500" />
-                  ) : (
-                    <PenLine className="h-4 w-4 shrink-0 text-muted" />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate font-medium">{p.filename}</span>
-                    <span className="block text-[11px] text-muted">
-                      {p.line_count ?? 0} lines · {p.corrected_count ?? 0} corrected · {timeAgo(p.created_at)}
-                      {p.item_id !== null && " · via capture"}
-                    </span>
-                  </span>
-                </button>
-              ))}
+          <Panel>
+            <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--line)" }}>
+              <MonoLabel>PAGES</MonoLabel>
             </div>
-          </div>
+            <div style={{ maxHeight: 384, overflowY: "auto" }}>
+              {pages.length === 0 && <p style={{ padding: "12px 16px", fontSize: 12, color: "var(--dim)" }}>No pages yet.</p>}
+              {pages.map((p) => {
+                const on = selected === p.id;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => selectPage(p.id)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "12px 16px",
+                      borderBottom: "1px solid var(--line)",
+                      borderLeft: `2px solid ${on ? "var(--accent)" : "transparent"}`,
+                      background: on ? "var(--panel2)" : "transparent",
+                    }}
+                  >
+                    {p.status === "processing" ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" style={{ color: "var(--accent)" }} />
+                    ) : p.status === "error" ? (
+                      <CircleAlert className="h-4 w-4 shrink-0" style={{ color: "#f87171" }} />
+                    ) : (
+                      <PenLine className="h-4 w-4 shrink-0" style={{ color: "var(--dim)" }} />
+                    )}
+                    <span style={{ minWidth: 0, flex: 1 }}>
+                      <span style={{ display: "block", fontSize: 13, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {p.filename}
+                      </span>
+                      <MonoLabel size={9} spacing="0.1em" dim style={{ marginTop: 3, display: "block" }}>
+                        {p.line_count ?? 0} LINES · {p.corrected_count ?? 0} CORRECTED · {timeAgo(p.created_at).toUpperCase()}
+                      </MonoLabel>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </Panel>
         </div>
 
         <div>
           {!detail ? (
-            <div className="flex h-64 items-center justify-center rounded-2xl border border-dashed border-line text-sm text-muted">
+            <div style={{ display: "grid", placeItems: "center", height: 256, border: "1px dashed var(--line2)", fontSize: 14, color: "var(--dim)" }}>
               Upload a page or pick one from the list.
             </div>
           ) : detail.status === "processing" ? (
-            <div className="flex h-64 flex-col items-center justify-center gap-3 surface text-sm text-muted">
-              <Loader2 className="h-6 w-6 animate-spin text-brand" />
+            <Panel style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, height: 256, fontSize: 14, color: "var(--dim)" }}>
+              <Loader2 className="h-6 w-6 animate-spin" style={{ color: "var(--accent)" }} />
               Reading your handwriting line by line…
-            </div>
+            </Panel>
           ) : detail.status === "error" ? (
-            <div className="surface p-6 text-sm text-red-500">
-              Recognition failed: {detail.error}
-            </div>
+            <Panel style={{ padding: 24, fontSize: 14, color: "#f87171" }}>Recognition failed: {detail.error}</Panel>
           ) : (
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <h2 className="min-w-0 flex-1 truncate font-semibold">{detail.filename}</h2>
-                <button
-                  onClick={toNotes}
-                  disabled={sentToNotes}
-                  className="inline-flex items-center gap-2 button-secondary disabled:opacity-60"
-                >
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <h2 style={{ margin: 0, minWidth: 0, flex: 1, fontSize: 16, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {detail.filename}
+                </h2>
+                <GlowButton variant="ghost" onClick={toNotes} disabled={sentToNotes}>
                   {sentToNotes ? (
                     <>
-                      <Check className="h-4 w-4 text-emerald-500" /> Sent to notes
+                      <Check className="h-4 w-4" style={{ color: "var(--accent)" }} /> SENT
                     </>
                   ) : (
                     <>
-                      <Send className="h-4 w-4" /> Send to notes
+                      <Send className="h-4 w-4" /> SEND TO NOTES
                     </>
                   )}
-                </button>
+                </GlowButton>
               </div>
-              <p className="text-xs text-muted">
-                Fix any line below — edits save when you leave the field and become training
-                examples for your personal model.
+              <p style={{ margin: 0, fontSize: 12, color: "var(--dim)" }}>
+                Fix any line below — edits save when you leave the field and become training examples for your personal model.
               </p>
               {detail.lines.map((line) => (
-                <LineEditor key={line.id} line={line} onSaved={() => { refresh(); }} />
+                <LineEditor key={line.id} line={line} onSaved={() => refresh()} />
               ))}
             </div>
           )}
         </div>
       </div>
-    </PageShell>
+    </section>
   );
 }
