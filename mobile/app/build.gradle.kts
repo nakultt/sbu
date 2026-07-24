@@ -22,11 +22,6 @@ android {
             "API_BASE_URL",
             "\"${providers.gradleProperty("STUDY_BUDDY_API_URL").orElse("http://100.192.1.162:8010").get().trimEnd('/')}\"",
         )
-        buildConfigField(
-            "String",
-            "WEB_BASE_URL",
-            "\"${providers.gradleProperty("STUDY_BUDDY_WEB_URL").orElse("http://100.192.1.162:3000").get().trimEnd('/')}\"",
-        )
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -104,23 +104,16 @@ fun AxiomApp() {
         mutableStateOf(connectionPreferences.getString("api_base_url", com.example.mobile.BuildConfig.API_BASE_URL)
             ?: com.example.mobile.BuildConfig.API_BASE_URL)
     }
-    var webBaseUrl by remember {
-        mutableStateOf(connectionPreferences.getString("web_base_url", com.example.mobile.BuildConfig.WEB_BASE_URL)
-            ?: com.example.mobile.BuildConfig.WEB_BASE_URL)
-    }
     val viewModel: AxiomViewModel = viewModel()
     val backend by viewModel.data
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { viewModel.connect(apiBaseUrl) }
-    val saveConnection: (String, String) -> Unit = { apiUrl, webUrl ->
+    val saveConnection: (String) -> Unit = { apiUrl ->
         val cleanApi = normalizeServerUrl(apiUrl)
-        val cleanWeb = normalizeServerUrl(webUrl)
         connectionPreferences.edit()
             .putString("api_base_url", cleanApi)
-            .putString("web_base_url", cleanWeb)
             .apply()
         apiBaseUrl = cleanApi
-        webBaseUrl = cleanWeb
         viewModel.connect(cleanApi)
     }
 
@@ -203,14 +196,15 @@ fun AxiomApp() {
                                 onResetTimer = { running = false; secs = 25 * 60 },
                                 onToggleTask = viewModel::toggleTask,
                                 onRetry = viewModel::refresh)
-                            AxiomScreen.Notes -> NotesScreen(colors, backend, viewModel::refresh)
+                            AxiomScreen.Notes -> NotesScreen(colors, backend, apiBaseUrl, viewModel::refresh)
                             AxiomScreen.Cards -> CardsScreen(colors, backend, viewModel::selectDeck, viewModel::refresh)
                             AxiomScreen.Plan -> PlannerScreen(colors, backend, viewModel::toggleTask, viewModel::refresh)
-                            AxiomScreen.All -> WebWorkspaceScreen(
+                            AxiomScreen.All -> NativeWorkspaceScreen(
                                 colors = colors,
+                                backend = backend,
                                 apiBaseUrl = apiBaseUrl,
-                                webBaseUrl = webBaseUrl,
                                 onSaveConnection = saveConnection,
+                                onRefreshCore = viewModel::refresh,
                             )
                         }
                     }

@@ -4,20 +4,19 @@ enum class AxiomScreen(val label: String) {
     Home("HOME"), Notes("NOTES"), Cards("CARDS"), Plan("PLAN"), All("ALL")
 }
 
-data class WebFeature(val label: String, val description: String, val route: String)
+data class NativeFeature(val label: String, val description: String, val key: String)
 
-val webFeatures = listOf(
-    WebFeature("Dashboard", "Workspace overview and recent activity", "/"),
-    WebFeature("Files & capture", "Upload files, paste text, or record a lecture", "/files"),
-    WebFeature("Notes", "Read, edit, move, import, export, and delete notes", "/notes"),
-    WebFeature("Ask & voice", "Ask cited questions or record a voice question", "/search"),
-    WebFeature("Handwriting", "Upload pages, correct OCR, and create notes", "/handwriting"),
-    WebFeature("Video boards", "Review lecture frames, OCR, and note placement", "/video"),
-    WebFeature("Flashcards", "Create in chat, study, switch, and delete decks", "/flashcards"),
-    WebFeature("Audiobooks", "Generate and download narrated notes", "/audiobooks"),
-    WebFeature("Tasks", "Create, complete, schedule, and delete tasks", "/tasks"),
-    WebFeature("Calendar", "Connect Google Calendar and manage proposals", "/calendar"),
-    WebFeature("Settings", "Service status, storage, and configuration", "/settings"),
+val nativeFeatures = listOf(
+    NativeFeature("Files & capture", "Upload material, paste text, or record a lecture", "files"),
+    NativeFeature("Notes manager", "Read, edit, move, import, export, and delete notes", "notes"),
+    NativeFeature("Ask & voice", "Ask cited questions or record a voice question", "ask"),
+    NativeFeature("Handwriting", "Upload pages, correct OCR, and create notes", "handwriting"),
+    NativeFeature("Video boards", "Review lecture frames, run OCR, approve, or delete", "video"),
+    NativeFeature("Flashcards", "Study and manage every generated deck", "flashcards"),
+    NativeFeature("Audiobooks", "Generate and open narrated notes", "audiobooks"),
+    NativeFeature("Tasks", "Create, complete, schedule, and delete tasks", "tasks"),
+    NativeFeature("Calendar", "Connect, sync, and approve Google Calendar proposals", "calendar"),
+    NativeFeature("System", "Live backend health, storage, and connection settings", "settings"),
 )
 
 data class BackendStats(

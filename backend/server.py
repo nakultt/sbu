@@ -443,7 +443,24 @@ def note_detail(note_id: int):
         ).fetchone()
     if not row:
         raise HTTPException(404, "Note not found")
-    return dict(row)
+    detail = dict(row)
+    images = [
+        {
+            "id": figure["id"],
+            "page": figure["page"],
+            "caption": figure["caption"],
+            "url": f"/api/doc/figures/{Path(figure['image_path']).name}",
+        }
+        for figure in db.list_doc_figures(detail["item_id"])
+        if Path(figure["image_path"]).exists()
+    ]
+    known_urls = {image["url"] for image in images}
+    for caption, url in re.findall(r"!\[([^\]]*)\]\(([^)\s]+)(?:\s+[^)]*)?\)", detail["markdown"]):
+        if url.startswith("/api/") and url not in known_urls:
+            images.append({"id": None, "page": None, "caption": caption, "url": url})
+            known_urls.add(url)
+    detail["images"] = images
+    return detail
 
 
 class NoteMove(BaseModel):

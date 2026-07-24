@@ -29,6 +29,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.example.mobile.network.StudyBuddyApi
+import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -261,8 +264,22 @@ private fun TodaysPlan(colors: AxiomColors, tasks: List<BackendTask>, onToggle: 
 }
 
 @Composable
-fun NotesScreen(colors: AxiomColors, data: MobileData, onRetry: () -> Unit) {
+fun NotesScreen(colors: AxiomColors, data: MobileData, apiBaseUrl: String, onRetry: () -> Unit) {
     var search by remember { mutableStateOf("") }
+    var selectedNoteId by remember { mutableStateOf<Int?>(null) }
+    var detail by remember { mutableStateOf<JSONObject?>(null) }
+    var detailError by remember { mutableStateOf("") }
+    var detailReload by remember { mutableIntStateOf(0) }
+    val api = remember(apiBaseUrl) { StudyBuddyApi(apiBaseUrl) }
+    LaunchedEffect(selectedNoteId, api, detailReload) {
+        detail = null
+        detailError = ""
+        selectedNoteId?.let { id ->
+            runCatching { api.objectRequest("/api/notes/$id").value }
+                .onSuccess { detail = it }
+                .onFailure { detailError = it.message ?: "Could not load this note." }
+        }
+    }
     val filtered = data.notes.filter {
         search.isBlank() ||
             it.title.orEmpty().contains(search, ignoreCase = true) ||
@@ -270,6 +287,44 @@ fun NotesScreen(colors: AxiomColors, data: MobileData, onRetry: () -> Unit) {
             it.subject.orEmpty().contains(search, ignoreCase = true)
     }
     ScreenColumn(gap = 14) {
+        if (selectedNoteId != null) {
+            Text("‹ NOTES", style = monoLabel(10, colors.accent, 0.14f), modifier = Modifier.axClick { selectedNoteId = null })
+            when {
+                detailError.isNotBlank() -> {
+                    Text(detailError, color = Color(0xFFF87171), fontSize = 12.sp)
+                    Text("RETRY", style = monoLabel(10, colors.accent, 0.14f), modifier = Modifier.axClick {
+                        detailReload++
+                    })
+                }
+                detail == null -> Text("LOADING FULL NOTE…", style = monoLabel(10, colors.dim, 0.12f))
+                else -> {
+                    val note = detail ?: return@ScreenColumn
+                    Text(
+                        note.optString("title").ifBlank { "Untitled" },
+                        style = TextStyle(fontFamily = Sans, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = colors.text),
+                    )
+                    Text(
+                        listOf(note.optString("subject").ifBlank { "Unfiled" }, timeAgo(note.optLong("created_at")))
+                            .joinToString(" · ").uppercase(),
+                        style = monoLabel(9, colors.faint, 0.1f),
+                    )
+                    note.optJSONArray("images")?.let { images ->
+                        for (index in 0 until images.length()) {
+                            val image = images.getJSONObject(index)
+                            RemoteImage("$apiBaseUrl${image.optString("url")}", 240)
+                            image.optString("caption").takeIf { it.isNotBlank() }?.let {
+                                Text(it, color = colors.dim, fontSize = 10.sp)
+                            }
+                        }
+                    }
+                    Text(
+                        note.optString("markdown"),
+                        style = TextStyle(fontFamily = Sans, fontSize = 13.sp, lineHeight = 20.sp, color = colors.text),
+                    )
+                }
+            }
+            return@ScreenColumn
+        }
         Text("Notes", style = TextStyle(fontFamily = Sans, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = colors.text))
         BackendState(data, colors, onRetry)
         Box(
@@ -292,7 +347,8 @@ fun NotesScreen(colors: AxiomColors, data: MobileData, onRetry: () -> Unit) {
         filtered.forEach { note ->
             Column(
                 Modifier.fillMaxWidth().border(1.dp, colors.line).background(colors.panel)
-                    .drawAccentEdge(colors.accent).padding(start = 16.dp, end = 16.dp, top = 15.dp, bottom = 15.dp)
+                    .drawAccentEdge(colors.accent).axClick { selectedNoteId = note.id }
+                    .padding(start = 16.dp, end = 16.dp, top = 15.dp, bottom = 15.dp)
             ) {
                 Text(
                     note.title ?: "Untitled",

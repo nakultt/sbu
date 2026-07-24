@@ -12,32 +12,16 @@ Start the complete backend from the repository root:
 make backend
 ```
 
-Start the web workspace in a second terminal. The mobile parity workspace uses
-this responsive application for the web-only workflows:
-
-```bash
-make frontend
-```
-
 The connection fields are filled on first launch with the current laptop
-addresses, `http://100.192.1.162:8010` and
-`http://100.192.1.162:3000`. Open **ALL → Laptop connection** in the mobile UI
-to enter the laptop's current backend and web URLs. **Save & Connect** applies
-the new backend immediately and stores both addresses in Android preferences,
-so they survive app restarts and do not require rebuilding the APK.
+address, `http://100.192.1.162:8010`. Open **ALL → Laptop backend** in the
+mobile UI to enter the laptop's current API URL. **Save & Connect** applies the
+new backend immediately and stores it in Android preferences, so it survives
+app restarts and does not require rebuilding the APK.
 
 Build-time properties remain available as initial defaults for managed builds:
 
 ```bash
 ./gradlew assembleDebug -PSTUDY_BUDDY_API_URL=http://192.168.1.20:8010
-```
-
-For a physical device, you may configure both initial defaults:
-
-```bash
-./gradlew assembleDebug \
-  -PSTUDY_BUDDY_API_URL=http://192.168.1.20:8010 \
-  -PSTUDY_BUDDY_WEB_URL=http://192.168.1.20:3000
 ```
 
 The phone and development machine must be on the same network, and the backend
@@ -63,6 +47,15 @@ The app uses these live endpoints:
 | Deck list | `GET /api/flashcards` |
 | Selected deck and cards | `GET /api/flashcards/{id}` |
 | Axiom AI | `POST /api/ask` |
+| Files, text, and recordings | `POST /api/upload`, `GET /api/items` |
+| Full note management | `/api/notes/*`, `/api/subjects` |
+| Voice questions and chat | `/api/ask/audio`, `/api/chat` |
+| Handwriting OCR | `/api/handwriting/*` |
+| Video-board review | `/api/video/*` |
+| Audiobooks | `/api/audiobooks/*` |
+| Complete task management | `/api/tasks/*` |
+| Google Calendar | `/api/calendar/*` |
+| System status | `/api/health`, `/api/stats` |
 
 At startup, the independent read requests run concurrently. Selecting a deck
 loads that deck from the backend. Task changes are written to the backend and
@@ -71,14 +64,11 @@ flow; failures are shown as errors and never replaced with canned text. The
 25-minute focus timer is intentionally on-device state and is not represented
 as backend data.
 
-The **ALL** tab provides complete parity with every web route: dashboard,
-files/capture, notes, cited search and voice questions, handwriting, video
-boards, flashcards, audiobooks, tasks, Google Calendar, and settings. These
-screens run the responsive web client inside an app-contained WebView. That client
-uses same-origin `/api/*` requests, which Next.js proxies to FastAPI. The
-WebView supplies the system file picker, microphone permission, authenticated
-downloads, browser history, and external-browser handling for Google OAuth and
-other off-site links. It never substitutes local sample data.
+The **ALL** tab is implemented entirely with Kotlin and Jetpack Compose. Files
+and images use Android's native document picker; recordings use
+`MediaRecorder`; JSON and multipart requests go directly to FastAPI; OCR
+images render in native `ImageView` components; and OAuth/download links use
+Android intents. No feature loads the web dashboard or a WebView.
 
 API discovery is available at `/api`, and the source-of-truth OpenAPI contract
 is `/api/openapi.json`.

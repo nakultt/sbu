@@ -102,6 +102,23 @@ class UploadApiTests(unittest.TestCase):
         self.assertEqual(db.get_item(item_id)["subject_id"], new_subject)
         update_subject.assert_called_once_with(item_id, "Computer Science")
 
+    def test_note_detail_includes_embedded_images_for_mobile(self):
+        item_id = db.add_item("diagram.txt", "/tmp/diagram.txt", "text")
+        note_id = db.add_note(
+            item_id,
+            "# Graphs\n\n![Shortest-path diagram](/api/doc/figures/graph.png)",
+        )
+
+        response = self.client.get(f"/api/notes/{note_id}")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["images"], [{
+            "id": None,
+            "page": None,
+            "caption": "Shortest-path diagram",
+            "url": "/api/doc/figures/graph.png",
+        }])
+
     @patch("server.vectorstore.delete_chunks")
     def test_delete_note_keeps_source_but_removes_note_chunks(self, delete_chunks):
         subject_id = db.get_or_create_subject("Computer Science")
