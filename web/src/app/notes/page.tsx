@@ -43,11 +43,10 @@ export default function NotesPage() {
 
   const loadDetail = useCallback(
     async (id: number) => {
-      if (detail[id]) return;
       const d = await getJSON<NoteDetail>(`/api/notes/${id}`);
       setDetail((prev) => ({ ...prev, [id]: d.markdown }));
     },
-    [detail],
+    [],
   );
 
   const refresh = useCallback(() => {

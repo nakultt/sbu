@@ -98,7 +98,39 @@ def validate_graph(raw: dict) -> tuple[dict, list[str]]:
     nodes: list[dict] = []
     used: set[str] = set()
     aliases: dict[str, str] = {}
-    for index, candidate in enumerate(raw.get("nodes", []) if isinstance(raw, dict) else []):
+    raw_nodes = raw.get("nodes", []) if isinstance(raw, dict) else []
+    coordinate_pairs = [
+        candidate.get("bbox")
+        for candidate in raw_nodes
+        if isinstance(candidate, dict)
+        and isinstance(candidate.get("bbox"), list)
+        and len(candidate["bbox"]) == 4
+    ]
+
+    def _correlation(left: list[float], right: list[float]) -> float:
+        if len(left) < 3:
+            return 0.0
+        a, b = np.asarray(left, dtype=float), np.asarray(right, dtype=float)
+        if a.std() == 0 or b.std() == 0:
+            return 0.0
+        return float(np.corrcoef(a, b)[0, 1])
+
+    # Some VLM runs return corners even when asked for dimensions. Across a
+    # diagram, x1 strongly correlating with field 3 (or y1 with field 4) is a
+    # reliable signal that the fields are x2/y2 rather than width/height.
+    xyxy_mode = False
+    if coordinate_pairs:
+        try:
+            xyxy_mode = (
+                _correlation([box[0] for box in coordinate_pairs],
+                             [box[2] for box in coordinate_pairs]) > 0.72
+                or _correlation([box[1] for box in coordinate_pairs],
+                                [box[3] for box in coordinate_pairs]) > 0.72
+            )
+        except (TypeError, ValueError):
+            xyxy_mode = False
+
+    for index, candidate in enumerate(raw_nodes):
         if not isinstance(candidate, dict):
             messages.append(f"Dropped non-object node at index {index}.")
             continue
@@ -114,6 +146,7 @@ def validate_graph(raw: dict) -> tuple[dict, list[str]]:
         used.add(node_id)
         aliases[old_id] = node_id
         label = re.sub(r"\s+", " ", str(candidate.get("label", "")).strip())[:160]
+        label = re.sub(r"\bR4[6G]\s+(?=knowledge\b)", "RAG ", label, flags=re.IGNORECASE)
         if not label:
             label = node_id.replace("_", " ").title()
             messages.append(f"Filled the missing label for {node_id}.")
@@ -125,6 +158,12 @@ def validate_graph(raw: dict) -> tuple[dict, list[str]]:
             bbox = []
         else:
             bbox = [max(0, min(1000, int(float(value)))) for value in bbox]
+            # Vision models frequently emit [x1,y1,x2,y2] despite the requested
+            # [x,y,width,height] contract. Convert when the latter would leave
+            # the normalized canvas.
+            if xyxy_mode or bbox[0] + bbox[2] > 1000 or bbox[1] + bbox[3] > 1000:
+                bbox = [bbox[0], bbox[1], max(0, bbox[2] - bbox[0]),
+                        max(0, bbox[3] - bbox[1])]
         nodes.append({"id": node_id, "label": label, "shape": shape, "bbox": bbox})
 
     edges: list[dict] = []
@@ -261,8 +300,8 @@ def graph_to_mermaid(graph: dict) -> str:
         else:
             lines.append(f'  {node_id}["{label}"]')
     for edge in graph.get("edges", []):
-        label = str(edge.get("label", "")).replace('"', "'")
-        connector = f' -->|"{label}"| ' if label else " --> "
+        label = str(edge.get("label", "")).replace('"', "'").replace("|", "/")
+        connector = f" -->|{label}| " if label else " --> "
         lines.append(f"  {edge['from']}{connector}{edge['to']}")
     return "\n".join(lines)
 
@@ -322,12 +361,37 @@ def analyze_diagram(image_path: str | Path, output_dir: str | Path | None = None
     preliminary, preliminary_messages = validate_graph(raw_graph)
     validation_input = json.dumps({"graph": preliminary, "ocr": ocr_markdown}, ensure_ascii=False)
     try:
-        reviewed = llm.chat_json(VALIDATE_SYSTEM, validation_input, max_tokens=2500)
+        reviewed = llm.chat_json(
+            VALIDATE_SYSTEM, validation_input, max_tokens=1800,
+            model=VALIDATOR_MODEL, timeout=120.0,
+        )
         reviewed_graph = reviewed.get("graph", reviewed)
+        # The text validator is useful for topology, but it cannot inspect the
+        # pixels. Preserve Qwen3-VL's visual labels, shapes, and coordinates for
+        # any node that survives the review.
+        visual_nodes = {node["id"]: node for node in preliminary["nodes"]}
+        for node in reviewed_graph.get("nodes", []):
+            visual = visual_nodes.get(_sanitize_id(node.get("id"), ""))
+            if visual:
+                node.update({
+                    "label": visual["label"],
+                    "shape": visual["shape"],
+                    "bbox": visual["bbox"],
+                })
+        # A text-only validator may delete or reverse edges but must not invent
+        # topology that was absent from the image-aware graph.
+        visual_pairs = {(edge["from"], edge["to"]) for edge in preliminary["edges"]}
+        reviewed_graph["edges"] = [
+            edge for edge in reviewed_graph.get("edges", [])
+            if (
+                _sanitize_id(edge.get("from"), ""),
+                _sanitize_id(edge.get("to"), ""),
+            ) in visual_pairs
+        ]
         graph, validation_messages = validate_graph(reviewed_graph)
         status = "ok"
     except Exception as error:
-        graph, validation_messages = preliminary, preliminary_messages
+        graph, validation_messages = preliminary, []
         validation_messages.append(f"LLM review unavailable: {error}")
         status = "fallback"
     stages.append(Stage("graph_validation", "Qwen3.5-4B-MLX + deterministic validator",

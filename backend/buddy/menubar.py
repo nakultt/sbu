@@ -1,7 +1,9 @@
 """Overlay buddy: a macOS menu-bar app for quick capture.
 
 Everything it saves lands in the inbox/ folder; the Streamlit app's background
-worker picks it up from there. Run with:  python -m buddy.menubar
+worker picks it up from there. Image captures therefore use the same automatic
+diagram detection and Mermaid extraction as web uploads. Run with:
+``python -m buddy.menubar``.
 """
 import subprocess
 import time
@@ -35,7 +37,11 @@ class BuddyApp(rumps.App):
         out = _stamp("screenshot", "png")
         subprocess.run(["screencapture", "-i", str(out)])
         if out.exists():
-            rumps.notification("Study Buddy", "Screenshot captured", out.name)
+            rumps.notification(
+                "Study Buddy",
+                "Screenshot queued",
+                f"{out.name} · checking for a diagram",
+            )
 
     def clipboard(self, _):
         import AppKit
@@ -44,7 +50,11 @@ class BuddyApp(rumps.App):
         if png:
             out = _stamp("clipboard", "png")
             png.writeToFile_atomically_(str(out), True)
-            rumps.notification("Study Buddy", "Clipboard image saved", out.name)
+            rumps.notification(
+                "Study Buddy",
+                "Clipboard image queued",
+                f"{out.name} · checking for a diagram",
+            )
             return
         text = pb.stringForType_(AppKit.NSPasteboardTypeString)
         if text and text.strip():

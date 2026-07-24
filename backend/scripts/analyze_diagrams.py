@@ -19,10 +19,24 @@ from core.diagrams import analyze_diagram, diagram_markdown  # noqa: E402
 
 def publish(source: Path, result: dict) -> int:
     db.init_db()
-    stored = FILES_DIR / f"diagram_{uuid.uuid4().hex[:10]}_{source.name}"
-    shutil.copy2(source, stored)
-    item_id = db.add_item(source.name, str(stored), "image")
     subject_id = db.get_or_create_subject("Diagram analysis")
+    with db.conn() as connection:
+        existing = connection.execute(
+            "SELECT items.id, items.stored_path, notes.id AS note_id FROM items "
+            "LEFT JOIN notes ON notes.item_id=items.id "
+            "WHERE items.filename=? AND items.subject_id=? ORDER BY items.id DESC LIMIT 1",
+            (source.name, subject_id),
+        ).fetchone()
+    if existing:
+        item_id = existing["id"]
+        note_id = existing["note_id"]
+        for old_path in db.delete_doc_figures_for_item(item_id):
+            Path(old_path).unlink(missing_ok=True)
+    else:
+        stored = FILES_DIR / f"diagram_{uuid.uuid4().hex[:10]}_{source.name}"
+        shutil.copy2(source, stored)
+        item_id = db.add_item(source.name, str(stored), "image")
+        note_id = None
     with db.conn() as connection:
         connection.execute(
             "UPDATE items SET status='done', title=?, subject_id=?, processed_at=? WHERE id=?",
@@ -39,6 +53,9 @@ def publish(source: Path, result: dict) -> int:
         f"/api/doc/figures/{original_path.name}",
         f"/api/doc/figures/{overlay_path.name}",
     )
+    if note_id:
+        db.update_note(note_id, markdown)
+        return note_id
     return db.add_note(item_id, markdown)
 
 

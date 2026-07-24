@@ -30,6 +30,24 @@ class DiagramValidationTests(unittest.TestCase):
         })
         self.assertIn("decision{\"Laptop 'available'?\"}", mermaid)
 
+    def test_detects_corner_coordinate_mode_across_nodes(self):
+        graph, _ = validate_graph({
+            "nodes": [
+                {"id": "a", "label": "A", "bbox": [100, 300, 200, 500]},
+                {"id": "b", "label": "B", "bbox": [300, 300, 400, 500]},
+                {"id": "c", "label": "C", "bbox": [500, 300, 600, 500]},
+            ],
+            "edges": [],
+        })
+        self.assertEqual(graph["nodes"][1]["bbox"], [300, 300, 100, 200])
+
+    def test_corrects_common_rag_ocr_confusion_in_context(self):
+        graph, _ = validate_graph({
+            "nodes": [{"id": "rag", "label": "Update R46 knowledge", "bbox": []}],
+            "edges": [],
+        })
+        self.assertEqual(graph["nodes"][0]["label"], "Update RAG knowledge")
+
 
 if __name__ == "__main__":
     unittest.main()

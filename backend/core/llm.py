@@ -31,10 +31,11 @@ def require_available() -> None:
         )
 
 
-def chat(system: str, user: str, temperature: float = 0.3, max_tokens: int = 2048) -> str:
+def chat(system: str, user: str, temperature: float = 0.3, max_tokens: int = 2048,
+         model: str | None = None, timeout: float = 60.0) -> str:
     require_available()
-    resp = _client.with_options(timeout=60.0, max_retries=0).chat.completions.create(
-        model=LMSTUDIO_MODEL,
+    resp = _client.with_options(timeout=timeout, max_retries=0).chat.completions.create(
+        model=model or LMSTUDIO_MODEL,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=temperature,
         max_tokens=max_tokens,
@@ -77,13 +78,15 @@ def _extract_json(text: str):
         raise
 
 
-def chat_json(system: str, user: str, max_tokens: int = 1024) -> dict:
+def chat_json(system: str, user: str, max_tokens: int = 1024,
+              model: str | None = None, timeout: float = 60.0) -> dict:
     """One retry with a fix-your-JSON prompt, then raise."""
     raw = chat(system + " Respond with a single JSON object only, no prose.", user,
-               temperature=0.1, max_tokens=max_tokens)
+               temperature=0.1, max_tokens=max_tokens, model=model, timeout=timeout)
     try:
         return _extract_json(raw)
     except Exception:
         fixed = chat("You fix malformed JSON. Respond with the corrected JSON object only.",
-                     raw, temperature=0.0, max_tokens=max_tokens)
+                     raw, temperature=0.0, max_tokens=max_tokens,
+                     model=model, timeout=timeout)
         return _extract_json(fixed)

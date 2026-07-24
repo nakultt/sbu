@@ -40,6 +40,45 @@ class PdfExtractionTests(unittest.TestCase):
         set_status.assert_not_called()
 
 
+class ImageDiagramExtractionTests(unittest.TestCase):
+    @patch("core.diagrams.analyze_diagram")
+    def test_detected_diagram_uses_mermaid_pipeline(self, analyze):
+        analyze.return_value = {
+            "graph": {
+                "is_diagram": True,
+                "nodes": [{"id": "a", "label": "A"}],
+                "title": "Detected flow",
+                "summary": "A to B.",
+            },
+            "ocr_markdown": "A → B",
+            "mermaid": "flowchart LR\n  a --> b",
+            "stages": [],
+        }
+        item = {"id": 7, "kind": "image", "stored_path": "/tmp/screenshot.png"}
+
+        chunks = _extract(item)
+
+        analyze.assert_called_once_with("/tmp/screenshot.png")
+        self.assertIn("```mermaid", chunks[0]["text"])
+        self.assertEqual(chunks[0]["diagram_result"]["graph"]["title"], "Detected flow")
+
+    @patch("core.ocr.ocr_image_annotations", return_value=[("ordinary photo text", 1.0, ())])
+    @patch("core.diagrams.analyze_diagram")
+    def test_non_diagram_falls_back_to_regular_image_ocr(self, analyze, annotations):
+        analyze.return_value = {
+            "graph": {"is_diagram": False, "nodes": []},
+            "ocr_markdown": "",
+            "mermaid": "flowchart LR",
+            "stages": [],
+        }
+        item = {"id": 8, "kind": "image", "stored_path": "/tmp/photo.png"}
+
+        chunks = _extract(item)
+
+        self.assertEqual(chunks, [{"text": "ordinary photo text", "image_path": "/tmp/photo.png"}])
+        annotations.assert_called_once_with("/tmp/photo.png")
+
+
 class GenerateNotesVisualTests(unittest.TestCase):
     def setUp(self):
         self._orig = ingest.llm.chat
