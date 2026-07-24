@@ -7,9 +7,9 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { Mic, Play, SendHorizonal, Sparkles, Square, Trash2 } from "lucide-react";
-import PageShell from "@/components/PageShell";
+import { Mic, Play, SendHorizonal, Square, Trash2 } from "lucide-react";
 import VideoModal from "@/components/VideoModal";
+import { MonoLabel } from "@/components/ui";
 import { API, getJSON, postJSON } from "@/lib/api";
 
 interface Subject { id: number; name: string }
@@ -44,8 +44,6 @@ function historyTime(timestamp?: number) {
 }
 
 // Server turns carry a unique id; an optimistic (not-yet-saved) turn has none.
-// Namespacing keeps the id- and index-based keys from ever colliding, which
-// previously made React silently drop a freshly-added assistant reply.
 function turnKey(turn: Turn, index: number) {
   return turn.id != null ? `id-${turn.id}` : `idx-${index}`;
 }
@@ -256,13 +254,33 @@ function SearchInner() {
     setChat([]);
   }
 
+  const questions = chat.filter((turn) => turn.role === "user");
+
   return (
-    <PageShell title="Ask My Notes" subtitle="Answers grounded in your own material, with citations.">
-      <div className="mb-4 flex items-center gap-3">
+    <section className="axscreen" style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 60px)", minHeight: 0 }}>
+      {/* Top bar */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "16px 32px",
+          borderBottom: "1px solid var(--line)",
+        }}
+      >
+        <MonoLabel size={11} spacing="0.2em" style={{ color: "var(--accent)" }}>ASK MY NOTES</MonoLabel>
         <select
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
-          className="rounded-xl border border-line bg-panel px-3 py-2 text-sm outline-none"
+          style={{
+            marginLeft: 12,
+            background: "var(--panel2)",
+            border: "1px solid var(--line)",
+            color: "var(--text)",
+            padding: "6px 10px",
+            fontSize: 12,
+            outline: "none",
+          }}
         >
           <option value="">All subjects</option>
           {subjects.map((s) => (
@@ -270,85 +288,153 @@ function SearchInner() {
           ))}
         </select>
         {chat.length > 0 && (
-          <button onClick={clearHistory} className="ml-auto inline-flex items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2 text-sm text-muted">
+          <button
+            onClick={clearHistory}
+            style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 8, color: "var(--dim)", fontSize: 12, border: "1px solid var(--line2)", padding: "6px 10px" }}
+          >
             <Trash2 className="h-4 w-4" /> Clear history
           </button>
         )}
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="max-h-[65vh] overflow-y-auto surface">
-          <div className="sticky top-0 border-b border-line bg-panel px-4 py-3 text-sm font-semibold">Chat history</div>
-          {chat.filter((turn) => turn.role === "user").length === 0 ? (
-            <p className="p-4 text-sm text-muted">Your previous questions will appear here.</p>
+      <div style={{ display: "grid", gridTemplateColumns: "240px minmax(0, 1fr)", flex: 1, minHeight: 0 }}>
+        {/* History rail */}
+        <div style={{ borderRight: "1px solid var(--line)", background: "var(--panel)", backdropFilter: "var(--blur)", WebkitBackdropFilter: "var(--blur)", overflowY: "auto", minHeight: 0 }}>
+          <div style={{ position: "sticky", top: 0, padding: "12px 16px", borderBottom: "1px solid var(--line)", background: "var(--panel)" }}>
+            <MonoLabel size={10} spacing="0.18em">CHAT HISTORY</MonoLabel>
+          </div>
+          {questions.length === 0 ? (
+            <p style={{ padding: 16, fontSize: 12, color: "var(--dim)" }}>Your previous questions will appear here.</p>
           ) : (
             chat.map((turn, index) => turn.role === "user" && (
               <button
                 key={turnKey(turn, index)}
                 onClick={() => document.getElementById(`chat-turn-${turnKey(turn, index)}`)?.scrollIntoView({ behavior: "smooth", block: "center" })}
-                className="block w-full border-b border-line px-4 py-3 text-left last:border-0 hover:bg-panel-muted"
+                style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 16px", borderBottom: "1px solid var(--line)" }}
               >
-                <span className="line-clamp-2 text-sm font-medium">{turn.content}</span>
-                <span className="mt-1 block text-[11px] text-muted">{historyTime(turn.created_at)}</span>
+                <span style={{ display: "block", fontSize: 13, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{turn.content}</span>
+                <MonoLabel size={9} spacing="0.12em" dim style={{ marginTop: 4, display: "block" }}>{historyTime(turn.created_at)}</MonoLabel>
               </button>
             ))
           )}
-        </aside>
+        </div>
 
-        <div className="min-h-[45vh] max-h-[65vh] space-y-4 overflow-y-auto surface p-5">
-          {chat.length === 0 && (
-            <div className="flex flex-col items-center gap-2 py-16 text-center">
-              <Sparkles className="h-8 w-8 text-brand" />
-              <p className="text-sm text-muted">Ask about your notes, or say “Create flashcards about…” to build a study deck.</p>
-            </div>
-          )}
-          {chat.map((t, i) =>
-            t.role === "user" ? (
-              <div id={`chat-turn-${turnKey(t, i)}`} key={turnKey(t, i)} className="ml-auto max-w-[75%] scroll-mt-4 rounded-2xl rounded-br-md bg-brand px-4 py-2.5 text-sm text-white">
-                {t.content}
+        {/* Conversation */}
+        <div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 16, minHeight: 0 }}>
+            {chat.length === 0 && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10, padding: "64px 0", textAlign: "center" }}>
+                <MonoLabel size={12} spacing="0.2em" style={{ color: "var(--accent)" }}>AXIOM AI</MonoLabel>
+                <p style={{ fontSize: 14, color: "var(--dim)", maxWidth: 420 }}>
+                  Ask about your notes, or say &ldquo;Create flashcards about…&rdquo; to build a study deck.
+                </p>
               </div>
-            ) : (
-              <div key={turnKey(t, i)} className="max-w-[85%] rounded-2xl rounded-bl-md bg-page px-4 py-3 text-sm">
-                <div className="prose prose-sm max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{t.content}</ReactMarkdown>
+            )}
+            {chat.map((t, i) =>
+              t.role === "user" ? (
+                <div
+                  id={`chat-turn-${turnKey(t, i)}`}
+                  key={turnKey(t, i)}
+                  style={{ marginLeft: "auto", maxWidth: "75%", border: "1px solid var(--accent)", background: "color-mix(in srgb, var(--accent) 12%, transparent)", padding: "10px 14px", fontSize: 14, color: "var(--text)", scrollMarginTop: 16 }}
+                >
+                  {t.content}
                 </div>
+              ) : (
+                <div key={turnKey(t, i)} style={{ maxWidth: "85%", border: "1px solid var(--line)", background: "var(--panel2)", padding: "14px 16px" }}>
+                  <div className="study-note" style={{ fontSize: 14 }}>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{t.content}</ReactMarkdown>
+                  </div>
 
-                {t.sources && t.sources.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 border-t border-line pt-2 text-xs text-muted">
-                    <span>Sources:</span>
-                    {t.sources.map((source, sourceIndex) => {
-                      const video = sourceVideo(t, source);
-                      return video ? (
-                        <Link key={`${source.item_id}-${sourceIndex}`} href={videoHref(video)} className="text-brand hover:underline">
-                          {source.label}
+                  {t.sources && t.sources.length > 0 && (
+                    <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: "4px 8px", borderTop: "1px solid var(--line)", paddingTop: 8, fontSize: 12, color: "var(--dim)" }}>
+                      <MonoLabel size={9} spacing="0.14em" dim>SOURCES</MonoLabel>
+                      {t.sources.map((source, sourceIndex) => {
+                        const video = sourceVideo(t, source);
+                        return video ? (
+                          <Link key={`${source.item_id}-${sourceIndex}`} href={videoHref(video)} style={{ color: "var(--accent)" }}>
+                            {source.label}
+                          </Link>
+                        ) : source.note_id ? (
+                          <Link key={`${source.item_id}-${sourceIndex}`} href={`/notes?note=${source.note_id}`} style={{ color: "var(--accent)" }}>
+                            {source.label}
+                          </Link>
+                        ) : (
+                          <span key={`${source.item_id}-${sourceIndex}`}>{source.label}</span>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {t.videos && t.videos.length > 0 && (
+                    <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {t.videos.map((video) => (
+                        <Link key={`${video.item_id}-${video.timestamp}`} href={videoHref(video)} style={{ display: "inline-flex", alignItems: "center", gap: 4, border: "1px solid var(--line2)", padding: "4px 8px", fontSize: 12, color: "var(--accent)" }}>
+                          <Play className="h-3 w-3" />Play from {timestampLabel(video.timestamp)}
                         </Link>
-                      ) : source.note_id ? (
-                        <Link key={`${source.item_id}-${sourceIndex}`} href={`/notes?note=${source.note_id}`} className="text-brand hover:underline">
-                          {source.label}
-                        </Link>
-                      ) : (
-                        <span key={`${source.item_id}-${sourceIndex}`}>{source.label}</span>
-                      );
-                    })}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  )}
+                  {t.images && t.images.length > 0 && (
+                    <div style={{ marginTop: 12, display: "grid", gap: 8, gridTemplateColumns: "repeat(2, 1fr)" }}>
+                      {t.images.map((picture) => (
+                        <figure key={picture.chunk_id} style={{ border: "1px solid var(--line)", background: "var(--panel)" }}>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={`${API}${picture.url}`} alt={picture.label} style={{ maxHeight: 256, width: "100%", objectFit: "contain" }} />
+                          <figcaption style={{ borderTop: "1px solid var(--line)", padding: "8px 12px", fontSize: 12, color: "var(--dim)" }}>
+                            {picture.label}{picture.timestamp != null ? ` @ ${Math.floor(picture.timestamp / 60)}:${String(Math.floor(picture.timestamp % 60)).padStart(2, "0")}` : ""}
+                          </figcaption>
+                        </figure>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ),
+            )}
 
-                {t.videos && t.videos.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {t.videos.map((video) => <Link key={`${video.item_id}-${video.timestamp}`} href={videoHref(video)} className="inline-flex items-center gap-1 rounded-lg bg-panel px-2 py-1 text-xs text-brand"><Play className="h-3 w-3" />Play from {timestampLabel(video.timestamp)}</Link>)}
-                  </div>
-                )}
-                {t.images && t.images.length > 0 && (
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {t.images.map((picture) => <figure key={picture.chunk_id} className="overflow-hidden rounded-xl border border-line bg-panel"><img src={`${API}${picture.url}`} alt={picture.label} className="max-h-64 w-full object-contain" /><figcaption className="border-t border-line px-3 py-2 text-xs text-muted">{picture.label}{picture.timestamp != null ? ` @ ${Math.floor(picture.timestamp / 60)}:${String(Math.floor(picture.timestamp % 60)).padStart(2, "0")}` : ""}</figcaption></figure>)}
-                  </div>
-                )}
-              </div>
-            ),
-          )}
+            {busy && <MonoLabel size={12} spacing="0.16em">{busyMessage.toUpperCase()}<span style={{ animation: "pulse 1s infinite" }}>…</span></MonoLabel>}
+            <div ref={bottomRef} />
+          </div>
 
-          {busy && <div className="text-sm text-muted">{busyMessage}</div>}
-          <div ref={bottomRef} />
+          {/* Input row */}
+          <div style={{ padding: "16px 24px", borderTop: "1px solid var(--line)" }}>
+            <div style={{ display: "flex", gap: 10 }}>
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && ask()}
+                disabled={busy || recording}
+                placeholder={recording ? "Listening… click stop when you finish" : "Ask about your notes or create flashcards…"}
+                style={{ flex: 1, background: "var(--panel2)", border: "1px solid var(--line)", color: "var(--text)", padding: "12px 16px", fontSize: 14, outline: "none" }}
+              />
+              <button
+                onClick={recording ? stopRecording : startRecording}
+                disabled={busy}
+                aria-label={recording ? "Stop recording and ask" : "Ask with microphone"}
+                title={recording ? "Stop recording and ask" : "Ask with microphone"}
+                style={{
+                  width: 48,
+                  display: "grid",
+                  placeItems: "center",
+                  border: `1px solid ${recording ? "#f87171" : "var(--line2)"}`,
+                  color: recording ? "#fff" : "var(--accent)",
+                  background: recording ? "#ef4444" : "transparent",
+                  animation: recording ? "pulse 1.4s infinite" : undefined,
+                }}
+              >
+                {recording ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-5 w-5" />}
+              </button>
+              <button
+                onClick={() => ask()}
+                disabled={busy || recording || !input.trim()}
+                aria-label="Send"
+                style={{ width: 48, display: "grid", placeItems: "center", border: "1px solid var(--accent)", color: "var(--accent)", background: "transparent", opacity: busy || recording || !input.trim() ? 0.5 : 1 }}
+              >
+                <SendHorizonal className="h-5 w-5" />
+              </button>
+            </div>
+            {recording && <p style={{ marginTop: 8, textAlign: "center", fontSize: 12, color: "#f87171" }}>Listening… click the stop button when your question is complete.</p>}
+            {speechError && <p style={{ marginTop: 8, textAlign: "center", fontSize: 12, color: "#f87171" }} role="alert">{speechError}</p>}
+          </div>
         </div>
       </div>
 
@@ -362,41 +448,7 @@ function SearchInner() {
           }}
         />
       )}
-
-      <div className="mt-4">
-        <div className="flex gap-2">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && ask()}
-            disabled={busy || recording}
-            placeholder={recording ? "Listening… click stop when you finish" : "Ask about your notes or create flashcards…"}
-            className="flex-1 rounded-full border border-line bg-panel px-5 py-3 text-sm outline-none focus:border-brand/40 disabled:opacity-65"
-          />
-          <button
-            onClick={recording ? stopRecording : startRecording}
-            disabled={busy}
-            className={`flex h-12 w-12 items-center justify-center rounded-full border transition disabled:opacity-50 ${
-              recording ? "animate-pulse border-red-300 bg-red-500 text-white" : "border-line bg-panel text-brand hover:border-brand/40"
-            }`}
-            aria-label={recording ? "Stop recording and ask" : "Ask with microphone"}
-            title={recording ? "Stop recording and ask" : "Ask with microphone"}
-          >
-            {recording ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-5 w-5" />}
-          </button>
-          <button
-            onClick={() => ask()}
-            disabled={busy || recording || !input.trim()}
-            className="flex h-12 w-12 items-center justify-center rounded-full bg-brand text-white disabled:opacity-50"
-            aria-label="Send"
-          >
-            <SendHorizonal className="h-5 w-5" />
-          </button>
-        </div>
-        {recording && <p className="mt-2 text-center text-xs font-medium text-red-500">Listening… click the stop button when your question is complete.</p>}
-        {speechError && <p className="mt-2 text-center text-xs text-red-500" role="alert">{speechError}</p>}
-      </div>
-    </PageShell>
+    </section>
   );
 }
 

@@ -27,6 +27,7 @@ export default function NoteMarkdown({ markdown, ctx, onSeek }: NoteMarkdownProp
       components={{
         a: makeSourceAnchor(ctx, onSeek),
         img: ({ src, alt }) => (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={typeof src === "string" && src.startsWith("/api/") ? `${API}${src}` : src}
             alt={alt ?? "Figure"}

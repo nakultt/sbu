@@ -1,27 +1,50 @@
 "use client";
 
-import { Menu, Moon, Search, ShieldCheck, Sun } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { Menu } from "lucide-react";
+import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
-import { getJSON } from "@/lib/api";
+import { getJSON, askText, type AskResult } from "@/lib/api";
+import MonoLabel from "@/components/ui/MonoLabel";
+
+function screenName(pathname: string): string {
+  if (pathname === "/") return "DASHBOARD";
+  const seg = pathname.split("/").filter(Boolean)[0] ?? "";
+  return seg.toUpperCase();
+}
+
+const SUGGESTIONS = [
+  "what's due today?",
+  "summarize my last note",
+  "what should I review?",
+];
 
 export default function Topbar({ onMenu }: { onMenu: () => void }) {
-  const router = useRouter();
+  const pathname = usePathname();
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const [q, setQ] = useState("");
   const [online, setOnline] = useState<boolean | null>(null);
+  const [clock, setClock] = useState("");
+  const [aiOpen, setAiOpen] = useState(false);
+  const [thinking, setThinking] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const [lastQ, setLastQ] = useState("");
 
   useEffect(() => {
-    const preferred = localStorage.getItem("study-buddy-theme") === "dark"
-      || (!localStorage.getItem("study-buddy-theme") && window.matchMedia("(prefers-color-scheme: dark)").matches);
-    document.documentElement.dataset.theme = preferred ? "dark" : "light";
+    const check = () =>
+      getJSON<{ ok: boolean }>("/api/health")
+        .then((r) => setOnline(r.ok))
+        .catch(() => setOnline(false));
+    check();
+    const timer = window.setInterval(check, 30_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
-    const check = () => getJSON<{ ok: boolean }>("/api/health")
-      .then((result) => setOnline(result.ok))
-      .catch(() => setOnline(false));
-    check();
-    const timer = window.setInterval(check, 30_000);
+    const tick = () =>
+      setClock(new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    tick();
+    const timer = window.setInterval(tick, 1000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -36,45 +59,207 @@ export default function Topbar({ onMenu }: { onMenu: () => void }) {
     return () => window.removeEventListener("keydown", shortcut);
   }, []);
 
-  function toggleTheme() {
-    const next = document.documentElement.dataset.theme !== "dark";
-    document.documentElement.dataset.theme = next ? "dark" : "light";
-    localStorage.setItem("study-buddy-theme", next ? "dark" : "light");
+  async function ask(text: string) {
+    const question = text.trim();
+    if (!question) return;
+    setAiOpen(true);
+    setThinking(true);
+    setAnswer("");
+    setLastQ(question);
+    try {
+      const result: AskResult = await askText(question);
+      setAnswer(result.answer);
+    } catch {
+      setAnswer("The local AI could not answer right now. Check that the backend and LM Studio are running.");
+    } finally {
+      setThinking(false);
+    }
   }
 
+  const hasAnswer = !thinking && !!answer;
+
   return (
-    <header className="sticky top-0 z-30 flex h-[76px] items-center gap-3 bg-page/82 px-4 backdrop-blur-xl sm:px-6 xl:px-5">
-      <button onClick={onMenu} className="rounded-xl p-2 text-muted hover:bg-panel hover:text-ink xl:hidden" aria-label="Open navigation">
+    <header
+      style={{
+        height: 60,
+        borderBottom: "1px solid var(--line)",
+        display: "flex",
+        alignItems: "center",
+        gap: 24,
+        justifyContent: "space-between",
+        padding: "0 28px",
+        background: "var(--panel)",
+        backdropFilter: "var(--blur)",
+        WebkitBackdropFilter: "var(--blur)",
+        position: "sticky",
+        top: 0,
+        zIndex: 20,
+      }}
+    >
+      <button
+        onClick={onMenu}
+        className="xl:hidden"
+        style={{ color: "var(--dim)", padding: 6 }}
+        aria-label="Open navigation"
+      >
         <Menu className="h-5 w-5" />
       </button>
 
-      <div className="relative max-w-[620px] flex-1">
-        <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
-        <input
-          ref={inputRef}
-          aria-label="Search your workspace"
-          placeholder="Search notes, files, or ask a question…"
-          onKeyDown={(event) => {
-            const value = event.currentTarget.value.trim();
-            if (event.key === "Enter" && value) router.push(`/search?q=${encodeURIComponent(value)}`);
+      <MonoLabel size={11} spacing="0.2em" className="hidden sm:inline" style={{ flexShrink: 0 }}>
+        AXIOM / {screenName(pathname)}
+      </MonoLabel>
+
+      {/* Ask bar */}
+      <div style={{ flex: 1, maxWidth: 540, position: "relative" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            border: `1px solid ${aiOpen ? "var(--accent)" : "var(--line)"}`,
+            background: "var(--panel2)",
+            padding: "8px 14px",
+            transition: "border-color 0.25s",
+            boxShadow: aiOpen ? "0 0 30px -16px var(--accent)" : "none",
           }}
-          className="h-11 w-full rounded-2xl border border-line bg-panel/88 pl-10 pr-14 text-[13px] font-medium shadow-[var(--shadow-card)] outline-none placeholder:text-muted/70 focus:border-brand/40 focus:ring-4 focus:ring-brand/8"
-        />
-        <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded-md border border-line bg-panel-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted sm:block">⌘ K</kbd>
+        >
+          <span
+            style={{
+              fontFamily: "var(--font-jetbrains-mono), monospace",
+              fontSize: 13,
+              color: "var(--accent)",
+            }}
+          >
+            ›
+          </span>
+          <input
+            ref={inputRef}
+            aria-label="Ask Axiom"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onFocus={() => {
+              if (answer || thinking) setAiOpen(true);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") ask(q);
+            }}
+            placeholder={`Ask Axiom — "${SUGGESTIONS[0]}"`}
+            style={{
+              flex: 1,
+              background: "transparent",
+              border: "none",
+              outline: "none",
+              color: "var(--text)",
+              fontFamily: "var(--font-space-grotesk), sans-serif",
+              fontSize: 13,
+              minWidth: 0,
+            }}
+          />
+          <MonoLabel size={9} spacing="0.14em" dim style={{ border: "1px solid var(--line2)", padding: "2px 6px" }}>
+            AI
+          </MonoLabel>
+        </div>
+
+        {aiOpen && (
+          <div
+            className="axscreen"
+            style={{
+              position: "absolute",
+              top: "calc(100% + 8px)",
+              left: 0,
+              right: 0,
+              zIndex: 30,
+              border: "1px solid var(--accent)",
+              background: "var(--panel)",
+              backdropFilter: "var(--blur)",
+              WebkitBackdropFilter: "var(--blur)",
+              boxShadow: "0 24px 50px -24px rgba(0,0,0,0.7), 0 0 40px -22px var(--accent)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "12px 18px",
+                borderBottom: "1px solid var(--line)",
+              }}
+            >
+              <MonoLabel size={10} spacing="0.2em" style={{ color: "var(--accent)" }}>
+                AXIOM AI{lastQ ? ` · ${lastQ.toUpperCase().slice(0, 40)}` : ""}
+              </MonoLabel>
+              <button
+                onClick={() => setAiOpen(false)}
+                style={{ color: "var(--dim)", fontFamily: "var(--font-jetbrains-mono), monospace", fontSize: 11 }}
+                aria-label="Close AI panel"
+              >
+                ✕
+              </button>
+            </div>
+            <div style={{ padding: 18, fontSize: 14, lineHeight: 1.65, color: "var(--text)", minHeight: 22 }}>
+              {thinking ? (
+                <MonoLabel size={12} spacing="0.16em">
+                  ANALYZING
+                  <span style={{ animation: "pulse 1s infinite" }}>…</span>
+                </MonoLabel>
+              ) : (
+                answer
+              )}
+            </div>
+            {hasAnswer && (
+              <div style={{ display: "flex", gap: 8, padding: "0 18px 16px", flexWrap: "wrap" }}>
+                {SUGGESTIONS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => {
+                      setQ(s);
+                      ask(s);
+                    }}
+                    style={{
+                      fontFamily: "var(--font-jetbrains-mono), monospace",
+                      fontSize: 10,
+                      letterSpacing: "0.1em",
+                      textTransform: "uppercase",
+                      color: "var(--dim)",
+                      border: "1px solid var(--line2)",
+                      padding: "6px 11px",
+                    }}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      <div className="ml-auto flex items-center gap-1.5 sm:gap-2">
-        <div className="hidden items-center gap-2 rounded-full border border-line bg-panel px-3 py-2 text-xs font-semibold text-muted shadow-sm md:flex">
-          <span className={`h-2 w-2 rounded-full ${online === null ? "bg-amber-400" : online ? "bg-emerald-500" : "bg-red-500"}`} />
-          {online === null ? "Connecting" : online ? "Local API ready" : "API offline"}
-        </div>
-        <button onClick={toggleTheme} className="rounded-xl border border-transparent p-2.5 text-muted hover:border-line hover:bg-panel hover:text-ink" aria-label="Toggle color theme">
-          <Moon className="theme-light-icon h-[18px] w-[18px]" />
-          <Sun className="theme-dark-icon h-[18px] w-[18px]" />
-        </button>
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink text-panel" title="Everything stays on this device">
-          <ShieldCheck className="h-[18px] w-[18px]" />
-        </div>
+      {/* Status */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 18,
+          fontFamily: "var(--font-jetbrains-mono), monospace",
+          fontSize: 11,
+          color: "var(--dim)",
+          flexShrink: 0,
+        }}
+        className="hidden md:flex"
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 7 }}>
+          <span
+            style={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              background: online === false ? "#f87171" : "var(--accent)",
+              animation: "pulse 2.4s infinite",
+            }}
+          />
+          {online === false ? "OFFLINE" : "SYNCED"}
+        </span>
+        <span>{clock}</span>
       </div>
     </header>
   );

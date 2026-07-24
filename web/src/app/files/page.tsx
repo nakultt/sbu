@@ -2,14 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CheckCircle2, CircleAlert, Cog, Hourglass, Mic, RotateCcw, Square, UploadCloud } from "lucide-react";
-import PageShell from "@/components/PageShell";
+import { Panel, MonoLabel, GlowButton } from "@/components/ui";
 import { API, getJSON, Item, RetryResult, timeAgo } from "@/lib/api";
 
 const STATUS_ICON: Record<string, React.ReactNode> = {
-  pending: <Hourglass className="h-4 w-4 text-amber-500" />,
-  processing: <Cog className="h-4 w-4 animate-spin text-blue-500" />,
-  done: <CheckCircle2 className="h-4 w-4 text-emerald-500" />,
-  error: <CircleAlert className="h-4 w-4 text-red-500" />,
+  pending: <Hourglass className="h-4 w-4" style={{ color: "#fbbf24" }} />,
+  processing: <Cog className="h-4 w-4 animate-spin" style={{ color: "var(--accent)" }} />,
+  done: <CheckCircle2 className="h-4 w-4" style={{ color: "var(--accent)" }} />,
+  error: <CircleAlert className="h-4 w-4" style={{ color: "#f87171" }} />,
 };
 
 interface RecordedAudio {
@@ -86,14 +86,14 @@ export default function FilesPage() {
         const request = new XMLHttpRequest();
         request.open("POST", `${API}/api/upload`);
         request.upload.onprogress = (event) => {
-          if (event.lengthComputable) setUploadProgress(Math.round(event.loaded / event.total * 100));
+          if (event.lengthComputable) setUploadProgress(Math.round((event.loaded / event.total) * 100));
         };
         request.onload = () => {
-            if (request.status >= 200 && request.status < 300) {
-                resolve(JSON.parse(request.responseText));
-            } else {
-                reject(new Error(JSON.parse(request.responseText || "{}").detail || `Upload failed (${request.status})`));
-            }
+          if (request.status >= 200 && request.status < 300) {
+            resolve(JSON.parse(request.responseText));
+          } else {
+            reject(new Error(JSON.parse(request.responseText || "{}").detail || `Upload failed (${request.status})`));
+          }
         };
         request.onerror = () => reject(new Error("Could not reach the Study Buddy API"));
         request.send(form);
@@ -187,11 +187,9 @@ export default function FilesPage() {
   async function saveRecording() {
     if (!recordedAudio) return;
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const file = new File(
-      [recordedAudio.blob],
-      `live-recording-${stamp}.${recordedAudio.extension}`,
-      { type: recordedAudio.blob.type },
-    );
+    const file = new File([recordedAudio.blob], `live-recording-${stamp}.${recordedAudio.extension}`, {
+      type: recordedAudio.blob.type,
+    });
     try {
       await upload([file]);
       discardRecording();
@@ -210,8 +208,8 @@ export default function FilesPage() {
       const result = body as RetryResult;
       setCaptureMessage(
         result.recovered === "vector_index"
-          ? `Repaired the search index for “${item.title ?? item.filename}”.`
-          : `Queued “${item.title ?? item.filename}” for processing again.`,
+          ? `Repaired the search index for "${item.title ?? item.filename}".`
+          : `Queued "${item.title ?? item.filename}" for processing again.`,
       );
       await refresh();
     } catch (error) {
@@ -221,167 +219,199 @@ export default function FilesPage() {
     }
   }
 
+  const fieldStyle: React.CSSProperties = {
+    width: "100%",
+    background: "var(--panel2)",
+    border: "1px solid var(--line)",
+    color: "var(--text)",
+    padding: "10px 12px",
+    fontSize: 14,
+    outline: "none",
+  };
+
   return (
-    <PageShell title="Files" subtitle="Everything you capture or upload, processed locally.">
-      <div className="mb-5 surface p-5">
-        <div className="flex flex-wrap items-center gap-4">
-          <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${
-            isRecording ? "animate-pulse bg-red-100" : "bg-chip-purple"
-          }`}>
-            <Mic className={`h-6 w-6 ${isRecording ? "text-red-500" : "text-brand"}`} />
+    <section className="axscreen" style={{ padding: 32, display: "flex", flexDirection: "column", gap: 24, maxWidth: 1000 }}>
+      <div>
+        <MonoLabel size={11} spacing="0.24em" style={{ color: "var(--accent)", display: "block", marginBottom: 8 }}>
+          LIBRARY
+        </MonoLabel>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 500 }}>Capture &amp; upload</h1>
+        <p style={{ margin: "8px 0 0", color: "var(--dim)", fontSize: 14 }}>
+          Everything you capture or upload, processed locally.
+        </p>
+      </div>
+
+      {/* Recorder */}
+      <Panel style={{ padding: 22 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
+          <span
+            style={{
+              width: 44,
+              height: 44,
+              borderRadius: "50%",
+              display: "grid",
+              placeItems: "center",
+              border: `1px solid ${isRecording ? "#f87171" : "var(--line2)"}`,
+              color: isRecording ? "#f87171" : "var(--accent)",
+              animation: isRecording ? "pulse 1.4s infinite" : undefined,
+            }}
+          >
+            <Mic className="h-5 w-5" />
           </span>
-          <div className="min-w-48 flex-1">
-            <h2 className="text-sm font-semibold">Record a lecture or voice note</h2>
-            <p className="text-xs text-muted">
+          <div style={{ minWidth: 180, flex: 1 }}>
+            <MonoLabel size={11}>RECORD A LECTURE OR VOICE NOTE</MonoLabel>
+            <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--dim)" }}>
               {isRecording
                 ? `Recording ${elapsedTime(recordingSeconds)} — keep this page open.`
                 : recordedAudio
                   ? "Recording ready. Preview it, then save it for transcription."
-                  : "Use your laptop microphone and turn the recording into study notes."}
+                  : "Use your microphone and turn the recording into study notes."}
             </p>
           </div>
           {!isRecording && !recordedAudio && (
-            <button
-              onClick={startRecording}
-              className="button-primary"
-            >
-              <Mic className="h-4 w-4" /> Start recording
-            </button>
+            <GlowButton onClick={startRecording}>
+              <Mic className="h-4 w-4" /> START RECORDING
+            </GlowButton>
           )}
           {isRecording && (
             <button
               onClick={stopRecording}
-              className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-white"
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#ef4444", color: "#fff", padding: "10px 16px", fontSize: 12, fontFamily: "var(--font-jetbrains-mono), monospace", letterSpacing: "0.1em" }}
             >
-              <Square className="h-3.5 w-3.5 fill-current" /> Stop recording
+              <Square className="h-3.5 w-3.5 fill-current" /> STOP
             </button>
           )}
         </div>
         {recordedAudio && (
-          <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-line pt-4">
-            <audio controls src={recordedAudio.url} className="h-10 min-w-60 flex-1" />
-            <button
-              onClick={startRecording}
-              className="inline-flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-sm font-medium"
-            >
-              <RotateCcw className="h-4 w-4" /> Record again
-            </button>
-            <button
-              onClick={saveRecording}
-              disabled={uploading}
-              className="button-primary disabled:opacity-60"
-            >
-              <UploadCloud className="h-4 w-4" /> {uploading ? "Saving…" : "Save & process"}
-            </button>
+          <div style={{ marginTop: 16, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+            <audio controls src={recordedAudio.url} style={{ height: 40, minWidth: 240, flex: 1 }} />
+            <GlowButton variant="ghost" onClick={startRecording}>
+              <RotateCcw className="h-4 w-4" /> AGAIN
+            </GlowButton>
+            <GlowButton onClick={saveRecording} disabled={uploading}>
+              <UploadCloud className="h-4 w-4" /> {uploading ? "SAVING…" : "SAVE & PROCESS"}
+            </GlowButton>
           </div>
         )}
-        {recordingError && <p className="mt-3 text-sm text-red-500" role="alert">{recordingError}</p>}
-      </div>
+        {recordingError && <p style={{ marginTop: 12, fontSize: 13, color: "#f87171" }} role="alert">{recordingError}</p>}
+      </Panel>
 
-      <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => { e.preventDefault(); setDragging(false); chooseFiles(e.dataTransfer.files); }}
-        className="surface p-5"
-      >
+      {/* Upload */}
+      <Panel style={{ padding: 22 }}>
         <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragging(false);
+            chooseFiles(e.dataTransfer.files);
+          }}
           onClick={() => inputRef.current?.click()}
-          className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed py-8 transition-colors ${
-            dragging ? "border-brand bg-brand-soft" : "border-line hover:border-brand/40"
-          }`}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            border: `1px dashed ${dragging ? "var(--accent)" : "var(--line2)"}`,
+            background: dragging ? "color-mix(in srgb, var(--accent) 8%, transparent)" : "transparent",
+            padding: "32px 0",
+            cursor: "pointer",
+          }}
         >
-          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-chip-purple">
-            <UploadCloud className="h-5 w-5 text-brand" />
+          <span style={{ width: 44, height: 44, borderRadius: "50%", display: "grid", placeItems: "center", border: "1px solid var(--line2)", color: "var(--accent)" }}>
+            <UploadCloud className="h-5 w-5" />
           </span>
-          <div className="text-sm font-semibold">
-            {uploading ? `Uploading… ${uploadProgress}%` :
-              (selectedFiles.length
+          <div style={{ fontSize: 14, fontWeight: 500 }}>
+            {uploading
+              ? `Uploading… ${uploadProgress}%`
+              : selectedFiles.length
                 ? `${selectedFiles.length} file${selectedFiles.length === 1 ? "" : "s"} selected`
-                : "Drop files here or click to choose")}
+                : "Drop files here or click to choose"}
           </div>
-          <div className="max-w-full truncate px-4 text-xs text-muted">
-            {selectedFiles.length
-              ? selectedFiles.map((file) => file.name).join(" · ")
-              : "audio · video · pdf · images · text"}
-          </div>
-          <input
-            ref={inputRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(e) => e.target.files && chooseFiles(e.target.files)}
-          />
+          <MonoLabel size={10} spacing="0.14em" dim>
+            {selectedFiles.length ? selectedFiles.map((file) => file.name).join(" · ") : "AUDIO · VIDEO · PDF · IMAGES · TEXT"}
+          </MonoLabel>
+          <input ref={inputRef} type="file" multiple hidden onChange={(e) => e.target.files && chooseFiles(e.target.files)} />
         </div>
-        <label className="mt-4 block text-sm font-semibold" htmlFor="capture-text">
-          Text or file context
+
+        <label htmlFor="capture-text" style={{ display: "block", marginTop: 16 }}>
+          <MonoLabel size={10} spacing="0.16em">TEXT OR FILE CONTEXT</MonoLabel>
         </label>
         <textarea
           id="capture-text"
           value={captureText}
-          onChange={(event) => { setCaptureText(event.target.value); setCaptureMessage(""); }}
+          onChange={(event) => {
+            setCaptureText(event.target.value);
+            setCaptureMessage("");
+          }}
           rows={4}
-          placeholder={'Write or paste notes here, or describe the files — e.g. “Yesterday\'s biology notes from the cell division lecture.”'}
-          className="mt-2 w-full resize-y rounded-xl border border-line px-3 py-2.5 text-sm outline-none focus:border-brand/40"
+          placeholder="Write or paste notes here, or describe the files — e.g. yesterday's biology notes from the cell-division lecture."
+          style={{ ...fieldStyle, marginTop: 8, resize: "vertical" }}
         />
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-          <p className="text-xs text-muted">
+        <div style={{ marginTop: 12, display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <p style={{ fontSize: 12, color: "var(--dim)", maxWidth: 460 }}>
             Text alone is saved as study material. With files, it becomes their context. Dates mentioned here are used in citations.
           </p>
-          <div className="flex items-center gap-2">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {selectedFiles.length > 0 && (
-              <button onClick={() => setSelectedFiles([])} className="px-3 py-2 text-sm text-muted">
+              <button onClick={() => setSelectedFiles([])} style={{ padding: "8px 12px", fontSize: 13, color: "var(--dim)" }}>
                 Clear files
               </button>
             )}
-            <button
-              onClick={saveCapture}
-              disabled={uploading || (!selectedFiles.length && !captureText.trim())}
-              className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-            >
-              {uploading ? "Adding…" : "Add to library"}
-            </button>
+            <GlowButton onClick={saveCapture} disabled={uploading || (!selectedFiles.length && !captureText.trim())}>
+              {uploading ? "ADDING…" : "ADD TO LIBRARY"}
+            </GlowButton>
           </div>
         </div>
-        {captureMessage && <p className="mt-3 text-sm text-muted" role="status">{captureMessage}</p>}
-      </div>
-      {uploadError && <p className="mt-3 text-sm text-red-500">{uploadError}</p>}
+        {captureMessage && <p style={{ marginTop: 12, fontSize: 13, color: "var(--dim)" }} role="status">{captureMessage}</p>}
+      </Panel>
+      {uploadError && <p style={{ fontSize: 13, color: "#f87171" }}>{uploadError}</p>}
 
-      <h2 className="mb-3 mt-8 font-semibold">Processing queue</h2>
-      <div className="overflow-hidden surface">
-        {items.length === 0 && <p className="p-5 text-sm text-muted">No files yet.</p>}
-        {items.map((it) => (
-          <div key={it.id} className="flex items-center gap-3 border-b border-line px-5 py-3.5 last:border-0">
-            {STATUS_ICON[it.status] ?? null}
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm font-medium">{it.title ?? it.filename}</div>
-              <div className="truncate text-xs text-muted">
-                {it.kind} · {it.capture_date ?? timeAgo(it.created_at)}
-                {it.subject ? ` · ${it.subject}` : ""}
-                {it.metadata_text ? ` · ${it.metadata_text}` : ""}
-                {it.error ? ` · ${it.error}` : ""}
+      {/* Queue */}
+      <div>
+        <MonoLabel style={{ display: "block", marginBottom: 12 }}>PROCESSING QUEUE</MonoLabel>
+        <Panel>
+          {items.length === 0 && <p style={{ padding: 20, fontSize: 13, color: "var(--dim)" }}>No files yet.</p>}
+          {items.map((it) => {
+            const statusColor =
+              it.status === "done" ? "var(--accent)" : it.status === "error" ? "#f87171" : "#fbbf24";
+            return (
+              <div key={it.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 20px", borderBottom: "1px solid var(--line)" }}>
+                {STATUS_ICON[it.status] ?? null}
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {it.title ?? it.filename}
+                  </div>
+                  <div style={{ fontSize: 12, color: "var(--dim)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {it.kind} · {it.capture_date ?? timeAgo(it.created_at)}
+                    {it.subject ? ` · ${it.subject}` : ""}
+                    {it.metadata_text ? ` · ${it.metadata_text}` : ""}
+                    {it.error ? ` · ${it.error}` : ""}
+                  </div>
+                </div>
+                <MonoLabel size={9} spacing="0.14em" style={{ color: statusColor, border: `1px solid ${statusColor}`, padding: "3px 8px" }}>
+                  {it.status}
+                </MonoLabel>
+                {it.status === "error" && (
+                  <button
+                    type="button"
+                    onClick={() => retryItem(it)}
+                    disabled={retryingItem === it.id}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "1px solid var(--line2)", padding: "6px 10px", fontSize: 11, color: "var(--accent)", fontFamily: "var(--font-jetbrains-mono), monospace" }}
+                  >
+                    <RotateCcw className={`h-3.5 w-3.5 ${retryingItem === it.id ? "animate-spin" : ""}`} />
+                    {retryingItem === it.id ? "…" : "RETRY"}
+                  </button>
+                )}
               </div>
-            </div>
-            <span className={`rounded-md px-2 py-0.5 text-[11px] font-medium ${
-              it.status === "done" ? "bg-chip-green text-emerald-600"
-              : it.status === "error" ? "bg-red-50 text-red-500"
-              : "bg-chip-orange text-amber-600"
-            }`}>
-              {it.status}
-            </span>
-            {it.status === "error" && (
-              <button
-                type="button"
-                onClick={() => retryItem(it)}
-                disabled={retryingItem === it.id}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-brand hover:bg-brand-soft disabled:opacity-50"
-              >
-                <RotateCcw className={`h-3.5 w-3.5 ${retryingItem === it.id ? "animate-spin" : ""}`} />
-                {retryingItem === it.id ? "Retrying…" : "Retry"}
-              </button>
-            )}
-          </div>
-        ))}
+            );
+          })}
+        </Panel>
       </div>
-    </PageShell>
+    </section>
   );
 }
