@@ -7,6 +7,7 @@ import remarkMath from "remark-math";
 import { API } from "@/lib/api";
 import { cleanStudyMarkdown } from "@/lib/markdown";
 import { linkifySources, makeSourceAnchor, NoteContext } from "@/lib/noteLinks";
+import MermaidDiagram from "@/components/MermaidDiagram";
 
 interface NoteMarkdownProps {
   markdown: string;
@@ -34,6 +35,15 @@ export default function NoteMarkdown({ markdown, ctx, onSeek }: NoteMarkdownProp
             className="max-h-[560px] rounded-xl object-contain"
           />
         ),
+        code: ({ className, children, ...props }) => {
+          const language = /language-(\w+)/.exec(className ?? "")?.[1];
+          const source = String(children).replace(/\n$/, "");
+          return language === "mermaid" ? (
+            <MermaidDiagram source={source} />
+          ) : (
+            <code className={className} {...props}>{children}</code>
+          );
+        },
         table: ({ children }) => <div className="study-note-table"><table>{children}</table></div>,
       }}
     >
