@@ -30,7 +30,10 @@ from fastapi.responses import (
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from core import db, flashcards, llm, notes as notes_module, rag, vectorstore
+from core import (
+    concepts, db, flashcards, gaps, llm, mastery, notes as notes_module, planner,
+    quiz, rag, report, vectorstore,
+)
 from core.config import (
     AUDIOBOOKS_DIR, DATA_DIR, FIGURES_DIR, FILES_DIR, HW_CROPS_DIR, HW_PAGES_DIR,
     INBOX_DIR, kind_of, settings,
@@ -1308,6 +1311,196 @@ def activity(limit: int = 10):
     return sorted(events, key=lambda e: -e["at"])[:limit]
 
 
+# ── Adaptive learning path ────────────────────────────────────────────────
+# Goal → concept graph → diagnostic → gaps → session → mastery → revision.
+
+class GoalCreate(BaseModel):
+    name: str
+
+
+class SessionCreate(BaseModel):
+    concept_id: int | None = None
+
+
+class AttemptCreate(BaseModel):
+    question_id: int
+    chosen_index: int
+    session_id: int | None = None
+    latency_ms: int = 0
+
+
+class ReadDone(BaseModel):
+    item_id: int
+
+
+class ConceptAsk(BaseModel):
+    concept_id: int
+    question: str
+
+
+def _require_goal() -> dict:
+    goal = concepts.current_goal()
+    if goal is None:
+        raise HTTPException(404, "No exam goal set yet")
+    return goal
+
+
+def _require_ready_goal() -> dict:
+    goal = _require_goal()
+    if goal["status"] != "ready":
+        raise HTTPException(409, f"The concept graph is {goal['status']}")
+    return goal
+
+
+@app.get("/api/learn/goal")
+def learn_goal():
+    goal = concepts.current_goal()
+    if goal is None:
+        return {"goal": None, "summary": None}
+    payload = {"goal": goal, "summary": None, "llm_available": llm.is_available()}
+    if goal["status"] == "ready":
+        payload["summary"] = gaps.summary(goal["id"])
+        payload["sessions"] = planner.recent(goal["id"], limit=5)
+    return payload
+
+
+@app.post("/api/learn/goal")
+async def create_learn_goal(req: GoalCreate):
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "An exam or subject name is required")
+    if not llm.is_available():
+        raise HTTPException(503, "The local LLM is unavailable, so the concept graph cannot be built")
+    existing = concepts.current_goal()
+    if existing is not None:
+        await run_in_threadpool(concepts.delete_goal, existing["id"])
+    try:
+        return {"goal": concepts.create_goal(name)}
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+
+
+@app.delete("/api/learn/goal")
+async def delete_learn_goal():
+    goal = _require_goal()
+    await run_in_threadpool(concepts.delete_goal, goal["id"])
+    return {"ok": True}
+
+
+@app.get("/api/learn/graph")
+async def learn_graph():
+    goal = _require_ready_goal()
+    return await run_in_threadpool(concepts.graph, goal["id"])
+
+
+@app.get("/api/learn/gaps")
+async def learn_gaps():
+    goal = _require_ready_goal()
+    ranked = await run_in_threadpool(gaps.rank, goal["id"])
+    return {"gaps": ranked, "summary": gaps.summary(goal["id"])}
+
+
+@app.post("/api/learn/diagnostic")
+async def learn_diagnostic():
+    goal = _require_ready_goal()
+    try:
+        session_id = await run_in_threadpool(planner.start_diagnostic, goal["id"])
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    return {"session_id": session_id}
+
+
+@app.post("/api/learn/session")
+async def learn_session(req: SessionCreate):
+    goal = _require_ready_goal()
+    try:
+        session_id = await run_in_threadpool(
+            planner.start_session, goal["id"], req.concept_id
+        )
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    return {"session_id": session_id}
+
+
+@app.get("/api/learn/session/{session_id}")
+def learn_session_state(session_id: int):
+    state = planner.state(session_id)
+    if state is None:
+        raise HTTPException(404, "Session not found")
+    return state
+
+
+@app.get("/api/learn/session/{session_id}/next")
+async def learn_session_next(session_id: int):
+    try:
+        item = await run_in_threadpool(planner.next_item, session_id)
+    except ValueError as error:
+        raise HTTPException(404, str(error))
+    if item is None:
+        return {"done": True, "session": planner.state(session_id)}
+    return {"done": False, "item": item}
+
+
+@app.post("/api/learn/session/{session_id}/read")
+def learn_session_read(session_id: int, req: ReadDone):
+    planner.mark_read(req.item_id)
+    return {"ok": True}
+
+
+@app.post("/api/learn/attempt")
+async def learn_attempt(req: AttemptCreate):
+    try:
+        return await run_in_threadpool(
+            quiz.grade, req.question_id, req.chosen_index, req.session_id, req.latency_ms
+        )
+    except ValueError as error:
+        raise HTTPException(404, str(error))
+
+
+@app.get("/api/learn/review")
+async def learn_review():
+    goal = _require_ready_goal()
+    queue = await run_in_threadpool(mastery.due_queue, goal["id"])
+    return {
+        "queue": queue,
+        "due": [row for row in queue if row["due"]],
+        "threshold": mastery.RECALL_DUE_THRESHOLD,
+    }
+
+
+@app.get("/api/learn/history")
+async def learn_history():
+    goal = _require_ready_goal()
+    points = await run_in_threadpool(mastery.history, goal["id"])
+    return {"points": points}
+
+
+@app.get("/api/learn/report/weekly")
+async def learn_report():
+    goal = _require_ready_goal()
+    return await run_in_threadpool(report.weekly, goal["id"])
+
+
+@app.post("/api/learn/ask")
+async def learn_ask(req: ConceptAsk):
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(400, "A question is required")
+    concept = concepts.get_concept(req.concept_id)
+    if concept is None:
+        raise HTTPException(404, "Concept not found")
+    chunks = concepts.source_chunks(req.concept_id, limit=8)
+    try:
+        result = await run_in_threadpool(
+            rag.answer_from_hits,
+            f"In the context of {concept['name']}: {question}",
+            chunks,
+        )
+    except llm.LocalLLMUnavailable as error:
+        raise HTTPException(503, str(error))
+    return result
+
+
 # Route domains are reflected in OpenAPI so both web and mobile can generate
 # clear client surfaces from the same contract.
 _ROUTE_TAGS = (
@@ -1323,6 +1516,7 @@ _ROUTE_TAGS = (
     ("/api/calendar", "calendar"),
     ("/api/tasks", "tasks"),
     ("/api/handwriting", "handwriting"),
+    ("/api/learn", "learn"),
     ("/api/subjects", "library"),
     ("/api/items", "library"),
     ("/api/upload", "library"),

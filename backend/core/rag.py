@@ -30,6 +30,17 @@ def ask(question: str, subject: str | None = None, k: int = 8) -> dict:
         k=max(k, RERANKER_CANDIDATE_K),
     )
     hits = reranker.rerank(question, candidates, top_k=k)
+    return answer_from_hits(question, hits)
+
+
+def answer_from_hits(question: str, hits: list[dict]) -> dict:
+    """Answer from an already-retrieved set of chunks.
+
+    Split out from `ask` so callers that select their own chunks — the adaptive
+    path scopes questions to one concept's bound sources — get identical
+    citation, image, and video handling.
+    """
+    llm.require_available()
     if not hits:
         return {"answer": "No notes found yet — ingest some material first.",
                 "sources": [], "images": [], "videos": []}

@@ -20,6 +20,7 @@ const GROUPS: { label: string; items: { href: string; label: string }[] }[] = [
   {
     label: "Learn",
     items: [
+      { href: "/learn", label: "Adaptive path" },
       { href: "/tasks", label: "Tasks" },
       { href: "/calendar", label: "Calendar" },
       { href: "/flashcards", label: "Flashcards" },
@@ -149,7 +150,7 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
       {/* Footer: settings, theme toggle, user chip */}
       <div style={{ padding: "16px 18px", borderTop: "1px solid var(--line)", display: "flex", flexDirection: "column", gap: 14 }}>
         <NavRow
-          num="11"
+          num="12"
           label="Settings"
           href="/settings"
           active={isActive(pathname, "/settings")}
