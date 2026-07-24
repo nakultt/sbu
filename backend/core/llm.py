@@ -90,3 +90,40 @@ def chat_json(system: str, user: str, max_tokens: int = 1024,
                      raw, temperature=0.0, max_tokens=max_tokens,
                      model=model, timeout=timeout)
         return _extract_json(fixed)
+
+
+def chat_json_schema(
+    system: str,
+    user: str,
+    schema: dict,
+    *,
+    name: str = "response",
+    max_tokens: int = 1024,
+    model: str | None = None,
+    timeout: float = 60.0,
+) -> dict:
+    """Use LM Studio's JSON Schema constrained decoding for reliable JSON."""
+    require_available()
+    response = _client.with_options(timeout=timeout, max_retries=0).chat.completions.create(
+        model=model or LMSTUDIO_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.1,
+        max_tokens=max_tokens,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": name,
+                "strict": True,
+                "schema": schema,
+            },
+        },
+    )
+    raw = response.choices[0].message.content or ""
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    result = _extract_json(raw)
+    if not isinstance(result, dict):
+        raise ValueError("Structured model response was not a JSON object")
+    return result

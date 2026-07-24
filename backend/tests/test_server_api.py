@@ -300,6 +300,89 @@ class UploadApiTests(unittest.TestCase):
         self.assertEqual(db.get_calendar_reminder(reminder_id)["status"], "created")
         apply.assert_called_once()
 
+    @patch("server.threading.Thread")
+    @patch("server.llm.require_available")
+    @patch("server.question_papers.generate")
+    def test_question_paper_generation_uses_background_job(
+        self, generate, _available, thread
+    ):
+        paper_id = db.create_question_paper(
+            title="Physics assessment",
+            difficulty="hard",
+            duration_minutes=90,
+            instructions="Answer all questions.",
+            questions=[{
+                "type": "short", "prompt": "Why?", "options": [],
+                "answer": "Because.", "explanation": "", "marks": 3,
+            }],
+            sources=[],
+        )
+        generate.return_value = {"id": paper_id, "title": "Physics assessment"}
+
+        response = self.client.post("/api/question-papers", json={
+            "note_ids": [3, 4],
+            "title": "Physics assessment",
+            "difficulty": "hard",
+            "duration_minutes": 90,
+            "mcq_count": 5,
+            "short_count": 3,
+            "long_count": 2,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "processing")
+        thread.assert_called_once()
+        thread.call_args.kwargs["target"]()
+        request = generate.call_args.args[0]
+        self.assertEqual(request.note_ids, [3, 4])
+        self.assertEqual(request.difficulty, "hard")
+        self.assertEqual(request.total_marks, 24)
+        jobs = self.client.get("/api/question-papers/jobs").json()
+        self.assertEqual(jobs[0]["status"], "done")
+        self.assertEqual(jobs[0]["paper_id"], paper_id)
+
+    def test_question_paper_download_separates_student_copy_and_answer_key(self):
+        import pymupdf
+
+        paper_id = db.create_question_paper(
+            title="Biology test",
+            difficulty="medium",
+            duration_minutes=30,
+            instructions="Answer every question.",
+            questions=[{
+                "type": "short",
+                "prompt": "Define mitosis.",
+                "options": [],
+                "answer": "Nuclear division.",
+                "explanation": "Award one mark for division.",
+                "marks": 3,
+            }],
+            sources=[],
+        )
+
+        student = self.client.get(f"/api/question-papers/{paper_id}/download")
+        answer_key = self.client.get(
+            f"/api/question-papers/{paper_id}/download?answers=true"
+        )
+
+        self.assertEqual(student.status_code, 200)
+        self.assertEqual(student.headers["content-type"], "application/pdf")
+        self.assertTrue(student.content.startswith(b"%PDF"))
+        student_text = "\n".join(
+            page.get_text()
+            for page in pymupdf.open(stream=student.content, filetype="pdf")
+        )
+        key_text = "\n".join(
+            page.get_text()
+            for page in pymupdf.open(stream=answer_key.content, filetype="pdf")
+        )
+        self.assertNotIn("Nuclear division.", student_text)
+        self.assertIn("Nuclear division.", key_text)
+        self.assertIn(
+            "Biology-test-answer-key.pdf",
+            answer_key.headers["content-disposition"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

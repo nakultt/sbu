@@ -30,7 +30,9 @@ from fastapi.responses import (
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from core import db, flashcards, llm, notes as notes_module, rag, vectorstore
+from core import (
+    db, flashcards, llm, notes as notes_module, question_papers, rag, vectorstore,
+)
 from core.config import (
     AUDIOBOOKS_DIR, DATA_DIR, FIGURES_DIR, FILES_DIR, HW_CROPS_DIR, HW_PAGES_DIR,
     INBOX_DIR, kind_of, settings,
@@ -86,6 +88,7 @@ app = FastAPI(
         {"name": "chat", "description": "Grounded questions and conversation history."},
         {"name": "video", "description": "Lecture video review and board extraction."},
         {"name": "flashcards", "description": "Generated study decks."},
+        {"name": "question-papers", "description": "Grounded assessments generated from notes."},
         {"name": "audiobooks", "description": "Generated audio study material."},
         {"name": "calendar", "description": "Calendar connection and reminder proposals."},
         {"name": "tasks", "description": "Student tasks and completion state."},
@@ -875,6 +878,94 @@ def remove_flashcard_deck(deck_id: int):
     return {"ok": True}
 
 
+class QuestionPaperRequest(BaseModel):
+    note_ids: list[int]
+    title: str = ""
+    difficulty: str = "medium"
+    duration_minutes: int = 60
+    mcq_count: int = 10
+    short_count: int = 5
+    long_count: int = 2
+
+
+@app.get("/api/question-papers")
+def list_question_papers():
+    return db.list_question_papers()
+
+
+@app.post("/api/question-papers")
+def create_question_paper(request: QuestionPaperRequest):
+    paper_request = question_papers.PaperRequest(
+        note_ids=request.note_ids,
+        title=request.title,
+        difficulty=request.difficulty.strip().casefold(),
+        duration_minutes=request.duration_minutes,
+        mcq_count=request.mcq_count,
+        short_count=request.short_count,
+        long_count=request.long_count,
+    )
+    try:
+        question_papers.validate_request(paper_request)
+        llm.require_available()
+    except llm.LocalLLMUnavailable as error:
+        raise HTTPException(503, str(error))
+    except ValueError as error:
+        raise HTTPException(400, str(error))
+    job_id = db.add_question_paper_job(request.model_dump())
+
+    def run():
+        try:
+            paper = question_papers.generate(paper_request)
+            db.finish_question_paper_job(job_id, paper_id=paper["id"])
+        except Exception as error:
+            logger.exception(
+                "question paper generation job failed", extra={"job_id": job_id}
+            )
+            detail = str(error).strip() or type(error).__name__
+            db.finish_question_paper_job(job_id, error=detail[:1000])
+
+    threading.Thread(
+        target=run, daemon=True, name=f"question-paper-{job_id}",
+    ).start()
+    return {"job_id": job_id, "status": "processing"}
+
+
+@app.get("/api/question-papers/jobs")
+def question_paper_jobs():
+    return db.list_question_paper_jobs()
+
+
+@app.get("/api/question-papers/{paper_id}")
+def get_question_paper(paper_id: int):
+    paper = db.get_question_paper(paper_id)
+    if paper is None:
+        raise HTTPException(404, "Question paper not found")
+    return paper
+
+
+@app.get("/api/question-papers/{paper_id}/download")
+def download_question_paper(paper_id: int, answers: bool = False):
+    paper = db.get_question_paper(paper_id)
+    if paper is None:
+        raise HTTPException(404, "Question paper not found")
+    suffix = "-answer-key" if answers else ""
+    filename = re.sub(r"[^a-zA-Z0-9_-]+", "-", paper["title"]).strip("-") or "question-paper"
+    return Response(
+        question_papers.to_pdf(paper, include_answers=answers),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}{suffix}.pdf"'
+        },
+    )
+
+
+@app.delete("/api/question-papers/{paper_id}")
+def delete_question_paper(paper_id: int):
+    if not db.delete_question_paper(paper_id):
+        raise HTTPException(404, "Question paper not found")
+    return {"ok": True}
+
+
 @app.get("/api/audiobooks/jobs")
 def audiobook_jobs():
     return db.list_audiobook_jobs()
@@ -928,7 +1019,7 @@ def google_calendar_callback(code: str = "", state: str = "", error: str = ""):
     from core import google_calendar
 
     if error or not code or not state:
-        return RedirectResponse("http://localhost:3000/calendar?google=denied")
+        return RedirectResponse(f"{settings.web_base_url}/calendar?google=denied")
     try:
         google_calendar.complete_authorization(code, state)
     except Exception as callback_error:
@@ -937,8 +1028,8 @@ def google_calendar_callback(code: str = "", state: str = "", error: str = ""):
             "Google Calendar OAuth callback failed: %s", callback_error, exc_info=True
         )
         google_calendar.record_oauth_error(callback_error)
-        return RedirectResponse("http://localhost:3000/calendar?google=error")
-    return RedirectResponse("http://localhost:3000/calendar?google=connected")
+        return RedirectResponse(f"{settings.web_base_url}/calendar?google=error")
+    return RedirectResponse(f"{settings.web_base_url}/calendar?google=connected")
 
 
 @app.get("/api/calendar/google/events")
@@ -1319,6 +1410,7 @@ _ROUTE_TAGS = (
     ("/api/chat", "chat"),
     ("/api/video", "video"),
     ("/api/flashcards", "flashcards"),
+    ("/api/question-papers", "question-papers"),
     ("/api/audiobooks", "audiobooks"),
     ("/api/calendar", "calendar"),
     ("/api/tasks", "tasks"),

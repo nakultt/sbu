@@ -46,6 +46,7 @@ The app uses these live endpoints:
 | Complete/uncomplete task | `PATCH /api/tasks/{id}` |
 | Deck list | `GET /api/flashcards` |
 | Selected deck and cards | `GET /api/flashcards/{id}` |
+| Question paper API | `/api/question-papers/*` |
 | Axiom AI | `POST /api/ask` |
 | Files, text, and recordings | `POST /api/upload`, `GET /api/items` |
 | Full note management | `/api/notes/*`, `/api/subjects` |
@@ -69,6 +70,18 @@ and images use Android's native document picker; recordings use
 `MediaRecorder`; JSON and multipart requests go directly to FastAPI; OCR
 images render in native `ImageView` components; and OAuth/download links use
 Android intents. No feature loads the web dashboard or a WebView.
+
+The native Calendar screen can connect or disconnect Google, sync reminders,
+browse month events, open events in Google Calendar, and approve or dismiss
+extracted proposals. Its current **Approve** action uses the compatibility
+endpoint and adds the event directly. Conflict-plan review and dynamic
+rescheduling are currently available in the web Calendar page; the shared
+backend endpoints under `/api/calendar/plans/*` are ready for a future native
+plan-review UI.
+
+Question-paper generation and review are currently web features. The Android
+client shares access to the backend contract but does not yet expose a native
+question-paper screen.
 
 API discovery is available at `/api`, and the source-of-truth OpenAPI contract
 is `/api/openapi.json`.

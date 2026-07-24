@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const apiTarget = (process.env.STUDY_BUDDY_API_URL ?? "http://127.0.0.1:8010").replace(/\/$/, "");
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   // The dashboard is intentionally used from other devices on this LAN.
   // Next 16 otherwise blocks its dev client/HMR and leaves the rendered page
   // unhydrated, so buttons and upload handlers appear but never run.

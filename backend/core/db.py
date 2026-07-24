@@ -164,6 +164,39 @@ CREATE TABLE IF NOT EXISTS flashcards (
 );
 CREATE INDEX IF NOT EXISTS idx_flashcards_deck_position
     ON flashcards(deck_id, position);
+CREATE TABLE IF NOT EXISTS question_papers (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    duration_minutes INTEGER NOT NULL,
+    total_marks INTEGER NOT NULL,
+    instructions TEXT NOT NULL,
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS question_paper_questions (
+    id INTEGER PRIMARY KEY,
+    paper_id INTEGER NOT NULL REFERENCES question_papers(id) ON DELETE CASCADE,
+    question_type TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    options_json TEXT NOT NULL DEFAULT '[]',
+    answer TEXT NOT NULL,
+    explanation TEXT NOT NULL DEFAULT '',
+    marks INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_question_paper_questions_position
+    ON question_paper_questions(paper_id, position);
+CREATE TABLE IF NOT EXISTS question_paper_jobs (
+    id INTEGER PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'processing',
+    request_json TEXT NOT NULL,
+    paper_id INTEGER REFERENCES question_papers(id),
+    error TEXT,
+    created_at REAL NOT NULL,
+    finished_at REAL
+);
 """
 
 
@@ -802,6 +835,132 @@ def delete_flashcard_deck(deck_id: int) -> bool:
 def flashcard_count() -> int:
     with conn() as c:
         return c.execute("SELECT COUNT(*) FROM flashcards").fetchone()[0]
+
+
+def create_question_paper(
+    title: str,
+    difficulty: str,
+    duration_minutes: int,
+    instructions: str,
+    questions: list[dict],
+    sources: list[dict],
+) -> int:
+    """Persist a complete generated paper and answer key atomically."""
+    now = time.time()
+    total_marks = sum(int(question["marks"]) for question in questions)
+    with conn() as c:
+        paper_id = c.execute(
+            "INSERT INTO question_papers "
+            "(title, difficulty, duration_minutes, total_marks, instructions, "
+            "sources_json, created_at) VALUES (?,?,?,?,?,?,?)",
+            (
+                title, difficulty, duration_minutes, total_marks, instructions,
+                json.dumps(sources, ensure_ascii=False), now,
+            ),
+        ).lastrowid
+        c.executemany(
+            "INSERT INTO question_paper_questions "
+            "(paper_id, question_type, prompt, options_json, answer, explanation, "
+            "marks, position, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            [
+                (
+                    paper_id, question["type"], question["prompt"],
+                    json.dumps(question.get("options", []), ensure_ascii=False),
+                    question["answer"], question.get("explanation", ""),
+                    question["marks"], position, now,
+                )
+                for position, question in enumerate(questions, start=1)
+            ],
+        )
+    return paper_id
+
+
+def list_question_papers():
+    with conn() as c:
+        rows = c.execute(
+            "SELECT question_papers.*, COUNT(question_paper_questions.id) AS question_count "
+            "FROM question_papers LEFT JOIN question_paper_questions "
+            "ON question_paper_questions.paper_id=question_papers.id "
+            "GROUP BY question_papers.id ORDER BY question_papers.created_at DESC"
+        ).fetchall()
+    papers = []
+    for row in rows:
+        paper = dict(row)
+        paper["sources"] = json.loads(paper.pop("sources_json"))
+        papers.append(paper)
+    return papers
+
+
+def get_question_paper(paper_id: int):
+    with conn() as c:
+        paper = c.execute(
+            "SELECT * FROM question_papers WHERE id=?", (paper_id,)
+        ).fetchone()
+        if paper is None:
+            return None
+        questions = c.execute(
+            "SELECT id, question_type, prompt, options_json, answer, explanation, "
+            "marks, position FROM question_paper_questions "
+            "WHERE paper_id=? ORDER BY position",
+            (paper_id,),
+        ).fetchall()
+    result = dict(paper)
+    result["sources"] = json.loads(result.pop("sources_json"))
+    result["questions"] = [
+        {
+            **dict(question),
+            "type": question["question_type"],
+            "options": json.loads(question["options_json"]),
+        }
+        for question in questions
+    ]
+    for question in result["questions"]:
+        question.pop("question_type")
+        question.pop("options_json")
+    result["question_count"] = len(result["questions"])
+    return result
+
+
+def delete_question_paper(paper_id: int) -> bool:
+    with conn() as c:
+        c.execute(
+            "UPDATE question_paper_jobs SET paper_id=NULL WHERE paper_id=?", (paper_id,)
+        )
+        c.execute(
+            "DELETE FROM question_paper_questions WHERE paper_id=?", (paper_id,)
+        )
+        return bool(c.execute(
+            "DELETE FROM question_papers WHERE id=?", (paper_id,)
+        ).rowcount)
+
+
+def add_question_paper_job(request: dict) -> int:
+    with conn() as c:
+        return c.execute(
+            "INSERT INTO question_paper_jobs (request_json, created_at) VALUES (?,?)",
+            (json.dumps(request, ensure_ascii=False), time.time()),
+        ).lastrowid
+
+
+def finish_question_paper_job(
+    job_id: int, paper_id: int | None = None, error: str | None = None,
+) -> None:
+    with conn() as c:
+        c.execute(
+            "UPDATE question_paper_jobs SET status=?, paper_id=?, error=?, finished_at=? "
+            "WHERE id=?",
+            ("error" if error else "done", paper_id, error, time.time(), job_id),
+        )
+
+
+def list_question_paper_jobs(limit: int = 20):
+    with conn() as c:
+        rows = c.execute(
+            "SELECT id, status, paper_id, error, created_at, finished_at "
+            "FROM question_paper_jobs ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def note_id_for_item(item_id: int) -> int | None:

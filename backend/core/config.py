@@ -86,6 +86,7 @@ class Settings:
     google_calendar_client_secret: str
     google_calendar_redirect_uri: str
     google_calendar_timezone: str
+    web_base_url: str
     data_dir: Path
     inbox_dir: Path
 
@@ -157,6 +158,7 @@ class Settings:
             google_calendar_timezone=os.getenv(
                 "GOOGLE_CALENDAR_TIMEZONE", "Asia/Kolkata"
             ),
+            web_base_url=os.getenv("WEB_BASE_URL", "http://localhost:3000").rstrip("/"),
             data_dir=_path("DATA_DIR", "data"),
             inbox_dir=_path("INBOX_DIR", "inbox"),
         )

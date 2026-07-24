@@ -15,7 +15,8 @@ Pillow
 
 # Documents & images
 pymupdf
-ocrmac
+ocrmac; sys_platform == "darwin"
+reportlab==4.4.9
 # Handwriting is transcribed by the LM Studio vision model (see core/handwriting.py)
 
 # Text-to-speech

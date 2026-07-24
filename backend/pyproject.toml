@@ -11,7 +11,7 @@ dependencies = [
   "kokoro==0.9.4",
   "lancedb==0.34.0",
   "numpy==2.4.6",
-  "ocrmac==1.0.1",
+  "ocrmac==1.0.1; sys_platform == 'darwin'",
   "openai==2.48.0",
   "pillow==12.3.0",
   "pyarrow==24.0.0",
@@ -20,6 +20,7 @@ dependencies = [
   "python-dotenv==1.2.2",
   "python-multipart==0.0.32",
   "python-telegram-bot==22.8",
+  "reportlab==4.4.9",
   "rumps==0.4.0; sys_platform == 'darwin'",
   "sentence-transformers==5.6.1",
   "silero-vad==6.2.1",
@@ -37,3 +38,16 @@ dev = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+torchaudio = [
+  { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
