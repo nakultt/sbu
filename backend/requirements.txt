@@ -1,0 +1,30 @@
+# Core
+python-dotenv
+openai
+streamlit
+lancedb
+pyarrow
+sentence-transformers
+
+# Speech-to-text
+useful-moonshine-onnx
+silero-vad
+soundfile
+numpy
+
+# Documents & images
+pymupdf
+ocrmac
+
+# Text-to-speech
+kokoro>=0.9
+
+# Overlay buddy (macOS)
+rumps
+sounddevice
+pyobjc-framework-Cocoa
+
+# Web API
+fastapi
+uvicorn[standard]
+python-multipart
