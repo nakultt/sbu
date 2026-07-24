@@ -125,11 +125,12 @@ def _assemble_structured_notes(title: str, generated_parts: list[str]) -> str:
     return "\n\n".join(document)
 
 CALENDAR_SYSTEM = (
-    "Extract actionable calendar reminders from study material. Return JSON as "
+    "Extract actionable scheduled events from any uploaded material. Return JSON as "
     "{\"events\": [{\"title\": string, \"date\": \"YYYY-MM-DD\", "
     "\"start_time\": \"HH:MM\" or null, \"end_time\": \"HH:MM\" or null, "
-    "\"description\": string}]}. Include only explicit upcoming exams, deadlines, "
-    "submissions, classes, meetings, appointments, or direct requests to remember a date. "
+    "\"description\": string}]}. Include any explicit upcoming commitment with a date: "
+    "exams, deadlines, submissions, classes, meetings, appointments, travel, shifts, "
+    "interviews, personal plans, or direct requests to remember a date. "
     "Do not treat the capture date, historical dates, source citations, or vague mentions as events. "
     "Resolve relative dates against the supplied capture date. Return an empty events list when unsure."
 )
@@ -437,10 +438,21 @@ def _queue_calendar_reminders(item_id: int, full_text: str, capture_date: str,
             description = f"Detected from Study Buddy: {source}"
             if event["description"]:
                 description += f"\n\n{event['description']}"
-            db.add_calendar_reminder(
+            reminder_id = db.add_calendar_reminder(
                 item_id, event["title"], event["event_date"],
                 event["start_time"], event["end_time"], description,
             )
+            if reminder_id:
+                try:
+                    from core import google_calendar
+                    google_calendar.auto_reschedule_reminder(reminder_id)
+                except Exception:
+                    # The event remains a proposal if Google is offline or the
+                    # calendar changes while ingestion is running.
+                    logging.exception(
+                        "Automatic calendar rescheduling failed",
+                        extra={"reminder_id": reminder_id},
+                    )
     except Exception:
         # Calendar automation must never prevent the source notes from being saved.
         traceback.print_exc()

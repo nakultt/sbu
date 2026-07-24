@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { ExternalLink, Link2, RefreshCw, Unlink } from "lucide-react";
+import { AlertTriangle, ArrowRight, ExternalLink, Link2, RefreshCw, Sparkles, Unlink } from "lucide-react";
 import CalendarWidget, { GoogleCalendarEvent } from "@/components/CalendarWidget";
 import { Panel, MonoLabel, GlowButton } from "@/components/ui";
 import { API, getJSON } from "@/lib/api";
@@ -15,6 +15,27 @@ interface CalendarStatus {
 
 interface CalendarProposal {
   id: number; title: string; event_date: string; start_time: string | null; description: string | null; filename: string;
+}
+
+interface CalendarMove {
+  event_id: string;
+  summary: string;
+  old_start: string;
+  old_end: string;
+  new_start: string;
+  new_end: string;
+  crosses_day: boolean;
+  reason: string;
+}
+
+interface CalendarPlan {
+  id: number;
+  summary: string;
+  new_event: { title: string; start: string; end: string; all_day: boolean; source: string | null };
+  moves: CalendarMove[];
+  blocked: Array<{ event_id: string; summary: string; reason: string; start: string; end: string }>;
+  needs_confirmation: boolean;
+  complex_reasons: string[];
 }
 
 function oauthErrorMessage(reason: string) {
@@ -36,6 +57,7 @@ export default function CalendarPage() {
   const [status, setStatus] = useState<CalendarStatus | null>(null);
   const [events, setEvents] = useState<GoogleCalendarEvent[]>([]);
   const [proposals, setProposals] = useState<CalendarProposal[]>([]);
+  const [activePlan, setActivePlan] = useState<CalendarPlan | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -76,15 +98,61 @@ export default function CalendarPage() {
     return () => window.clearInterval(timer);
   }, []);
 
-  async function decideProposal(id: number, decision: "approve" | "dismiss") {
+  async function applyPlan(plan: CalendarPlan) {
+    const response = await fetch(`${API}/api/calendar/plans/${plan.id}/apply`, { method: "POST" });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.detail || "The calendar changed. Create a fresh plan.");
+    }
+    setActivePlan(null);
+    setMessage(plan.moves.length
+      ? `Schedule updated. ${plan.moves.length} event${plan.moves.length === 1 ? "" : "s"} moved.`
+      : "Event added to Google Calendar.");
+    await refresh();
+  }
+
+  async function planProposal(id: number) {
     setBusy(true);
     try {
-      const response = await fetch(`${API}/api/calendar/proposals/${id}/${decision}`, { method: "POST" });
+      const response = await fetch(`${API}/api/calendar/proposals/${id}/plan`, { method: "POST" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail || "Could not prepare a conflict-free schedule.");
+      }
+      const plan = await response.json() as CalendarPlan;
+      if (!plan.needs_confirmation && plan.blocked.length === 0) {
+        await applyPlan(plan);
+      } else {
+        setActivePlan(plan);
+        setMessage("This schedule needs your decision before anything changes.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not prepare a conflict-free schedule.");
+      setBusy(false);
+    }
+  }
+
+  async function dismissProposal(id: number) {
+    setBusy(true);
+    try {
+      const response = await fetch(`${API}/api/calendar/proposals/${id}/dismiss`, { method: "POST" });
       if (!response.ok) throw new Error();
-      setMessage(decision === "approve" ? "Event added to Google Calendar." : "Suggestion dismissed.");
+      setMessage("Schedule suggestion dismissed.");
       await refresh();
     } catch {
-      setMessage(decision === "approve" ? "Connect Google Calendar before adding this event." : "Could not update this suggestion.");
+      setMessage("Could not dismiss this suggestion.");
+      setBusy(false);
+    }
+  }
+
+  async function confirmPlan() {
+    if (!activePlan) return;
+    setBusy(true);
+    try {
+      await applyPlan(activePlan);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not apply this schedule.");
+    } finally {
       setBusy(false);
     }
   }
@@ -165,7 +233,7 @@ export default function CalendarPage() {
           <MonoLabel size={11}>GOOGLE CALENDAR</MonoLabel>
           <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 4 }}>
             {status?.connected
-              ? "Connected · events require your approval"
+              ? "Connected · routine conflicts can be rescheduled automatically"
               : status?.configured
                 ? "Ready to connect"
                 : "OAuth credentials need configuration"}
@@ -203,9 +271,9 @@ export default function CalendarPage() {
       {/* Proposals */}
       {proposals.length > 0 && (
         <Panel accent style={{ padding: 18 }}>
-          <MonoLabel style={{ display: "block" }}>CALENDAR SUGGESTIONS</MonoLabel>
+          <MonoLabel style={{ display: "block" }}>SCHEDULES FOUND IN NOTES</MonoLabel>
           <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--dim)" }}>
-            Dates found in your study materials are never added automatically. Review each one.
+            Any dated commitment can reshape your calendar. Routine solo events move automatically; complex conflicts come back to you.
           </p>
           <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             {proposals.map((proposal) => (
@@ -218,10 +286,10 @@ export default function CalendarPage() {
                   </MonoLabel>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <GlowButton onClick={() => void decideProposal(proposal.id, "approve")} disabled={busy || !status?.connected} style={{ padding: "8px 12px", fontSize: 10 }}>
-                    ADD TO GOOGLE
+                  <GlowButton onClick={() => void planProposal(proposal.id)} disabled={busy || !status?.connected} style={{ padding: "8px 12px", fontSize: 10 }}>
+                    <Sparkles className="h-3.5 w-3.5" /> RESCHEDULE
                   </GlowButton>
-                  <GlowButton variant="ghost" onClick={() => void decideProposal(proposal.id, "dismiss")} disabled={busy} style={{ padding: "8px 12px", fontSize: 10 }}>
+                  <GlowButton variant="ghost" onClick={() => void dismissProposal(proposal.id)} disabled={busy} style={{ padding: "8px 12px", fontSize: 10 }}>
                     DISMISS
                   </GlowButton>
                 </div>
@@ -229,6 +297,60 @@ export default function CalendarPage() {
             ))}
           </div>
           {!status?.connected && <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--dim)" }}>Connect Google Calendar to approve a suggestion.</p>}
+        </Panel>
+      )}
+
+      {activePlan && (
+        <Panel style={{ padding: 18, borderColor: activePlan.blocked.length ? "#f59e0b" : "var(--accent)" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+            <div>
+              <MonoLabel style={{ color: activePlan.blocked.length ? "#f59e0b" : "var(--accent)" }}>
+                {activePlan.blocked.length ? "YOUR DECISION IS NEEDED" : "REVIEW RESCHEDULE PLAN"}
+              </MonoLabel>
+              <h2 style={{ margin: "7px 0 0", fontSize: 18, fontWeight: 500 }}>{activePlan.new_event.title}</h2>
+              <p style={{ margin: "5px 0 0", color: "var(--dim)", fontSize: 12 }}>
+                {new Date(activePlan.new_event.start).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+              </p>
+            </div>
+            {activePlan.blocked.length > 0 && <AlertTriangle className="h-5 w-5" style={{ color: "#f59e0b", flexShrink: 0 }} />}
+          </div>
+
+          {activePlan.moves.length > 0 && (
+            <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 8 }}>
+              {activePlan.moves.map((move) => (
+                <div key={move.event_id} style={{ display: "grid", gridTemplateColumns: "minmax(120px, 1fr) auto minmax(140px, 1fr)", alignItems: "center", gap: 10, padding: 12, background: "var(--panel2)" }}>
+                  <div>
+                    <div style={{ fontSize: 13 }}>{move.summary}</div>
+                    <div style={{ color: "var(--dim)", fontSize: 11, marginTop: 3 }}>{new Date(move.old_start).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</div>
+                  </div>
+                  <ArrowRight className="h-4 w-4" style={{ color: "var(--accent)" }} />
+                  <div style={{ fontSize: 12 }}>
+                    {new Date(move.new_start).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activePlan.blocked.map((conflict) => (
+            <div key={conflict.event_id} style={{ marginTop: 10, padding: 12, border: "1px solid #f59e0b", color: "#f59e0b", fontSize: 12 }}>
+              <strong>{conflict.summary}</strong> cannot move automatically because it {conflict.reason}. Move or cancel it in Google Calendar, then run Reschedule again.
+            </div>
+          ))}
+
+          {activePlan.complex_reasons.length > 0 && (
+            <p style={{ margin: "12px 0 0", color: "var(--dim)", fontSize: 12 }}>
+              Asked because {activePlan.complex_reasons.join(" and ")}.
+            </p>
+          )}
+          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
+            <GlowButton onClick={() => void confirmPlan()} disabled={busy || activePlan.blocked.length > 0}>
+              CONFIRM CHANGES
+            </GlowButton>
+            <GlowButton variant="ghost" onClick={() => setActivePlan(null)} disabled={busy}>
+              KEEP CURRENT SCHEDULE
+            </GlowButton>
+          </div>
         </Panel>
       )}
 

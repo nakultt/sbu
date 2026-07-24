@@ -1001,6 +1001,76 @@ def dismiss_calendar_proposal(reminder_id: int):
     return {"ok": True}
 
 
+@app.post("/api/calendar/proposals/{reminder_id}/plan")
+def plan_calendar_proposal(reminder_id: int):
+    from datetime import timedelta
+    from zoneinfo import ZoneInfo
+    from core import calendar_planner, google_calendar
+    from core.config import GOOGLE_CALENDAR_TIMEZONE
+
+    if not google_calendar.credentials():
+        raise HTTPException(401, "Google Calendar is not connected")
+    reminder = db.get_calendar_reminder(reminder_id)
+    if not reminder or reminder["status"] != "proposed":
+        raise HTTPException(404, "Calendar proposal not found")
+    zone = ZoneInfo(GOOGLE_CALENDAR_TIMEZONE)
+    event_day = datetime.fromisoformat(reminder["event_date"]).date()
+    start = datetime.combine(event_day, datetime.min.time(), zone)
+    end = start + timedelta(days=8)
+    try:
+        events = google_calendar.list_events(start.isoformat(), end.isoformat())
+        plan = calendar_planner.build_plan(reminder, events)
+    except Exception as error:
+        logger.exception("calendar planning failed", extra={"reminder_id": reminder_id})
+        raise HTTPException(502, f"Could not prepare a calendar plan: {str(error)[:160]}")
+    plan_id = db.add_reschedule_plan(reminder_id, plan)
+    return {"id": plan_id, "status": "proposed", **plan}
+
+
+@app.get("/api/calendar/plans/{plan_id}")
+def calendar_plan(plan_id: int):
+    stored = db.get_reschedule_plan(plan_id)
+    if not stored:
+        raise HTTPException(404, "Calendar plan not found")
+    plan = stored.pop("plan")
+    return {**stored, **plan}
+
+
+@app.post("/api/calendar/plans/{plan_id}/apply")
+def apply_calendar_plan(plan_id: int):
+    from core import google_calendar
+
+    stored = db.get_reschedule_plan(plan_id)
+    if not stored or stored["status"] != "proposed":
+        raise HTTPException(404, "Active calendar plan not found")
+    plan = stored["plan"]
+    if plan.get("blocked"):
+        raise HTTPException(
+            409,
+            "This plan has fixed conflicts. Move or cancel them in Google Calendar, then re-plan.",
+        )
+    reminder = db.get_calendar_reminder(stored["reminder_id"])
+    if not reminder or reminder["status"] != "proposed":
+        raise HTTPException(409, "The source event is no longer pending")
+    try:
+        event_id = google_calendar.apply_reschedule_plan(plan, reminder)
+        db.set_calendar_reminder_result(reminder["id"], event_id)
+        db.set_reschedule_plan_status(plan_id, "applied")
+    except PermissionError as error:
+        raise HTTPException(401, str(error))
+    except Exception as error:
+        db.set_reschedule_plan_status(plan_id, "error", str(error)[:500])
+        raise HTTPException(409, str(error)[:200])
+    return {"ok": True, "google_event_id": event_id, "moved": len(plan.get("moves", []))}
+
+
+@app.post("/api/calendar/plans/{plan_id}/dismiss")
+def dismiss_calendar_plan(plan_id: int):
+    if not db.set_reschedule_plan_status(plan_id, "dismissed"):
+        raise HTTPException(404, "Calendar plan not found")
+    return {"ok": True}
+
+
 class AudiobookRequest(BaseModel):
     note_ids: list[int]
     name: str

@@ -258,6 +258,48 @@ class UploadApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(db.list_tasks(), [])
 
+    @patch("core.google_calendar.list_events", return_value=[])
+    @patch("core.google_calendar.credentials", return_value=object())
+    def test_calendar_proposal_can_be_planned_without_changing_google(
+        self, _credentials, _events
+    ):
+        item_id = db.add_item("schedule.png", "/tmp/schedule.png", "image")
+        reminder_id = db.add_calendar_reminder(
+            item_id, "Dentist", "2026-08-20", "10:00", "11:00", None
+        )
+
+        response = self.client.post(f"/api/calendar/proposals/{reminder_id}/plan")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["new_event"]["title"], "Dentist")
+        self.assertEqual(response.json()["moves"], [])
+        self.assertEqual(
+            db.get_reschedule_plan(response.json()["id"])["status"], "proposed"
+        )
+
+    @patch("core.google_calendar.apply_reschedule_plan", return_value="google-event")
+    def test_confirmed_calendar_plan_is_applied_and_audited(self, apply):
+        item_id = db.add_item("schedule.png", "/tmp/schedule.png", "image")
+        reminder_id = db.add_calendar_reminder(
+            item_id, "Dentist", "2026-08-20", "10:00", "11:00", None
+        )
+        plan_id = db.add_reschedule_plan(reminder_id, {
+            "reminder_id": reminder_id,
+            "new_event": {"title": "Dentist"},
+            "moves": [],
+            "blocked": [],
+            "needs_confirmation": False,
+            "complex_reasons": [],
+        })
+
+        response = self.client.post(f"/api/calendar/plans/{plan_id}/apply")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["google_event_id"], "google-event")
+        self.assertEqual(db.get_reschedule_plan(plan_id)["status"], "applied")
+        self.assertEqual(db.get_calendar_reminder(reminder_id)["status"], "created")
+        apply.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

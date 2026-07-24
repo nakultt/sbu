@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS calendar_reminders (
     created_at REAL NOT NULL,
     UNIQUE(item_id, title, event_date, start_time)
 );
+CREATE TABLE IF NOT EXISTS calendar_reschedule_plans (
+    id INTEGER PRIMARY KEY,
+    reminder_id INTEGER NOT NULL REFERENCES calendar_reminders(id),
+    status TEXT NOT NULL DEFAULT 'proposed',
+    plan_json TEXT NOT NULL,
+    error TEXT,
+    created_at REAL NOT NULL,
+    applied_at REAL
+);
 CREATE TABLE IF NOT EXISTS chat_turns (
     id INTEGER PRIMARY KEY,
     role TEXT NOT NULL CHECK(role IN ('user','assistant')),
@@ -620,6 +629,51 @@ def list_calendar_proposals():
             "WHERE calendar_reminders.status='proposed' "
             "ORDER BY calendar_reminders.event_date, calendar_reminders.start_time"
         ).fetchall()]
+
+
+def get_calendar_reminder(reminder_id: int):
+    with conn() as c:
+        row = c.execute(
+            "SELECT calendar_reminders.*, items.filename FROM calendar_reminders "
+            "JOIN items ON items.id = calendar_reminders.item_id "
+            "WHERE calendar_reminders.id=?",
+            (reminder_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def add_reschedule_plan(reminder_id: int, plan: dict) -> int:
+    with conn() as c:
+        c.execute(
+            "UPDATE calendar_reschedule_plans SET status='superseded' "
+            "WHERE reminder_id=? AND status='proposed'",
+            (reminder_id,),
+        )
+        return c.execute(
+            "INSERT INTO calendar_reschedule_plans "
+            "(reminder_id, plan_json, created_at) VALUES (?,?,?)",
+            (reminder_id, json.dumps(plan, ensure_ascii=False), time.time()),
+        ).lastrowid
+
+
+def get_reschedule_plan(plan_id: int):
+    with conn() as c:
+        row = c.execute(
+            "SELECT * FROM calendar_reschedule_plans WHERE id=?", (plan_id,)
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["plan"] = json.loads(result.pop("plan_json"))
+    return result
+
+
+def set_reschedule_plan_status(plan_id: int, status: str, error: str | None = None) -> bool:
+    with conn() as c:
+        return c.execute(
+            "UPDATE calendar_reschedule_plans SET status=?, error=?, applied_at=? WHERE id=?",
+            (status, error, time.time() if status == "applied" else None, plan_id),
+        ).rowcount > 0
 
 
 def set_calendar_reminder_status(reminder_id: int, status: str) -> bool:

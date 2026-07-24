@@ -209,6 +209,7 @@ def list_events(time_min: str, time_max: str) -> list[dict]:
         for event in result.get("items", []):
             start = event.get("start", {})
             end = event.get("end", {})
+            private = event.get("extendedProperties", {}).get("private", {})
             events.append({
                 "id": event.get("id"),
                 "summary": event.get("summary") or "Untitled event",
@@ -218,6 +219,20 @@ def list_events(time_min: str, time_max: str) -> list[dict]:
                 "end": end.get("dateTime") or end.get("date"),
                 "all_day": "date" in start,
                 "html_link": event.get("htmlLink"),
+                "attendees": [
+                    {
+                        "email": attendee.get("email"),
+                        "display_name": attendee.get("displayName"),
+                        "response_status": attendee.get("responseStatus"),
+                    }
+                    for attendee in event.get("attendees", [])
+                    if not attendee.get("self")
+                ],
+                "recurring_event_id": event.get("recurringEventId"),
+                "agent_movable": (
+                    private.get("studyBuddyMovable") == "true"
+                    if "studyBuddyMovable" in private else None
+                ),
             })
         page_token = result.get("nextPageToken")
         if not page_token:
@@ -323,6 +338,108 @@ def sync_pending_reminders() -> dict:
         except Exception as error:
             db.set_calendar_reminder_result(reminder["id"], None, str(error)[:500])
     return {"created": created, "pending": len(db.list_pending_calendar_reminders())}
+
+
+def apply_reschedule_plan(plan: dict, reminder: dict) -> str:
+    """Move events and create the captured event, rolling moves back on failure."""
+    if plan.get("blocked"):
+        raise ValueError("This plan still contains fixed conflicts")
+    creds = credentials()
+    if not creds:
+        raise PermissionError("Google Calendar is not connected")
+    from googleapiclient.discovery import build
+
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    applied: list[dict] = []
+    try:
+        for move in plan.get("moves", []):
+            current = service.events().get(
+                calendarId="primary", eventId=move["event_id"],
+            ).execute()
+            current_start = current.get("start", {}).get("dateTime")
+            current_end = current.get("end", {}).get("dateTime")
+            if not current_start or not current_end:
+                raise RuntimeError(f"{move['summary']} is no longer a timed event")
+            if (
+                datetime.fromisoformat(current_start).astimezone(timezone.utc)
+                != datetime.fromisoformat(move["old_start"]).astimezone(timezone.utc)
+                or datetime.fromisoformat(current_end).astimezone(timezone.utc)
+                != datetime.fromisoformat(move["old_end"]).astimezone(timezone.utc)
+            ):
+                raise RuntimeError(
+                    f"{move['summary']} changed after this plan was prepared; create a new plan"
+                )
+            original_private = current.get("extendedProperties", {}).get("private", {})
+            body = {
+                "start": {
+                    "dateTime": move["new_start"],
+                    "timeZone": GOOGLE_CALENDAR_TIMEZONE,
+                },
+                "end": {
+                    "dateTime": move["new_end"],
+                    "timeZone": GOOGLE_CALENDAR_TIMEZONE,
+                },
+                "extendedProperties": {
+                    "private": {
+                        **original_private,
+                        "studyBuddyManaged": "true",
+                        "studyBuddyOriginalStart": move["old_start"],
+                        "studyBuddyOriginalEnd": move["old_end"],
+                    }
+                },
+            }
+            service.events().patch(
+                calendarId="primary", eventId=move["event_id"],
+                body=body, sendUpdates="none",
+            ).execute()
+            applied.append({**move, "_original_private": original_private})
+        return create_reminder(reminder)
+    except Exception:
+        for move in reversed(applied):
+            try:
+                service.events().patch(
+                    calendarId="primary", eventId=move["event_id"],
+                    body={
+                        "start": {
+                            "dateTime": move["old_start"],
+                            "timeZone": GOOGLE_CALENDAR_TIMEZONE,
+                        },
+                        "end": {
+                            "dateTime": move["old_end"],
+                            "timeZone": GOOGLE_CALENDAR_TIMEZONE,
+                        },
+                        "extendedProperties": {
+                            "private": move["_original_private"],
+                        },
+                    },
+                    sendUpdates="none",
+                ).execute()
+            except Exception:
+                log.exception("Could not roll back calendar event %s", move["event_id"])
+        raise
+
+
+def auto_reschedule_reminder(reminder_id: int) -> dict | None:
+    """Apply a routine plan during ingestion; persist complex plans for review."""
+    if not credentials():
+        return None
+    from core import calendar_planner
+
+    reminder = db.get_calendar_reminder(reminder_id)
+    if not reminder or reminder["status"] != "proposed":
+        return None
+    zone = ZoneInfo(GOOGLE_CALENDAR_TIMEZONE)
+    event_day = datetime.fromisoformat(reminder["event_date"]).date()
+    start = datetime.combine(event_day, datetime.min.time(), zone)
+    events = list_events(start.isoformat(), (start + timedelta(days=8)).isoformat())
+    plan = calendar_planner.build_plan(reminder, events)
+    plan_id = db.add_reschedule_plan(reminder_id, plan)
+    if plan["needs_confirmation"] or plan["blocked"]:
+        return {"plan_id": plan_id, "applied": False, **plan}
+    event_id = apply_reschedule_plan(plan, reminder)
+    db.set_calendar_reminder_result(reminder_id, event_id)
+    db.set_reschedule_plan_status(plan_id, "applied")
+    return {"plan_id": plan_id, "applied": True, **plan}
 
 
 def disconnect() -> None:
