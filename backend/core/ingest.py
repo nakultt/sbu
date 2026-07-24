@@ -212,6 +212,28 @@ def _extract(item: dict) -> list[dict]:
         ]
 
     if kind == "image":
+        # Flowcharts/architecture diagrams need graph-aware extraction. The
+        # analyzer is intentionally attempted before generic OCR so its
+        # PaddleOCR-VL transcription, connector topology, and Mermaid graph
+        # travel together through note generation and RAG.
+        try:
+            from core.diagrams import analyze_diagram
+            diagram = analyze_diagram(path)
+            if diagram["graph"].get("is_diagram") and diagram["graph"].get("nodes"):
+                graph = diagram["graph"]
+                source_text = (
+                    f"Diagram: {graph['title']}\n"
+                    f"{graph.get('summary', '')}\n\n"
+                    f"Extracted labels and tables:\n{diagram['ocr_markdown']}\n\n"
+                    f"Validated Mermaid graph:\n```mermaid\n{diagram['mermaid']}\n```"
+                )
+                return [{
+                    "text": source_text,
+                    "image_path": path,
+                    "diagram_result": diagram,
+                }]
+        except Exception:
+            traceback.print_exc()  # ordinary image OCR remains available
         from core.ocr import ocr_image_annotations
         try:
             annotations = ocr_image_annotations(path)
@@ -310,6 +332,22 @@ def _collect_visuals(item: dict, chunks: list[dict]) -> list[dict]:
                     "anchor": None,
                 })
                 token += 1
+            diagram = next(
+                (chunk.get("diagram_result") for chunk in chunks if chunk.get("diagram_result")),
+                None,
+            )
+            if diagram and Path(diagram["overlay"]).exists():
+                overlay_bytes = Path(diagram["overlay"]).read_bytes()
+                overlay = figures._persist(
+                    item["id"], None, "Detected diagram nodes", overlay_bytes,
+                )
+                visuals.append({
+                    "token_id": token,
+                    "url": f"/api/doc/figures/{overlay['filename']}",
+                    "caption": overlay["caption"],
+                    "anchor": None,
+                })
+                token += 1
     except Exception:
         traceback.print_exc()  # notes must still generate without figures
     return visuals
@@ -331,6 +369,20 @@ def _generate_notes(full_text: str, chunks: list[dict], title: str = "Study note
         )
         sections.append(llm.chat(NOTES_SYSTEM, prompt, max_tokens=1800))
     notes = _assemble_structured_notes(title, sections)
+    diagrams = [
+        chunk["diagram_result"] for chunk in chunks if chunk.get("diagram_result")
+    ]
+    for diagram in diagrams:
+        notes += (
+            "\n\n## Editable diagram\n\n```mermaid\n"
+            + diagram["mermaid"]
+            + "\n```\n\n## Diagram pipeline\n\n"
+            + "\n".join(
+                f"- **{stage['name'].replace('_', ' ').title()}:** "
+                f"{stage['status']} via {stage['implementation']}"
+                for stage in diagram["stages"]
+            )
+        )
     # Keep the source material in the note as well as the LLM's study guide.
     # This is deliberately not truncated: a lecture upload must retain its
     # complete timestamped transcript for reading and RAG retrieval.

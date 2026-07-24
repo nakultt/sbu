@@ -126,7 +126,7 @@ class Settings:
             ).rstrip("/"),
             lmstudio_api_key=os.getenv("LMSTUDIO_API_KEY", "lm-studio"),
             lmstudio_model=model,
-            vision_model=os.getenv("VISION_MODEL", model).strip(),
+            vision_model=os.getenv("VISION_MODEL", "qwen/qwen3-vl-4b").strip(),
             reranker_enabled=_boolean("RERANKER_ENABLED", True),
             reranker_model=os.getenv(
                 "RERANKER_MODEL",
