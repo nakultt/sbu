@@ -241,7 +241,17 @@ def trace_connectors(path: str | Path, max_side: int = 480) -> tuple[dict, np.nd
         if scale < 1:
             gray = gray.resize((max(1, int(gray.width * scale)), max(1, int(gray.height * scale))))
         array = np.asarray(gray)
-    threshold = min(225, int(np.percentile(array, 32)) + 48)
+    # Keep faint paper/grid lines out of the topology. A high fixed threshold
+    # turns an entire ruled notebook page into one giant junction.
+    histogram = np.bincount(array.ravel(), minlength=256).astype(float)
+    probabilities = histogram / histogram.sum()
+    omega = np.cumsum(probabilities)
+    means = np.cumsum(probabilities * np.arange(256))
+    total_mean = means[-1]
+    between = (total_mean * omega - means) ** 2 / np.maximum(
+        omega * (1 - omega), 1e-12
+    )
+    threshold = min(190, max(70, int(np.argmax(between))))
     ink = array < threshold
     skeleton = _thin(ink)
     padded = np.pad(skeleton, 1)
@@ -378,15 +388,18 @@ def analyze_diagram(image_path: str | Path, output_dir: str | Path | None = None
                     "shape": visual["shape"],
                     "bbox": visual["bbox"],
                 })
-        # A text-only validator may delete or reverse edges but must not invent
-        # topology that was absent from the image-aware graph.
-        visual_pairs = {(edge["from"], edge["to"]) for edge in preliminary["edges"]}
-        reviewed_graph["edges"] = [
-            edge for edge in reviewed_graph.get("edges", [])
-            if (
+        # A text-only validator must neither invent nor delete image topology.
+        # It may improve labels on an edge that Qwen3-VL already saw.
+        reviewed_by_pair = {
+            (
                 _sanitize_id(edge.get("from"), ""),
                 _sanitize_id(edge.get("to"), ""),
-            ) in visual_pairs
+            ): edge
+            for edge in reviewed_graph.get("edges", [])
+        }
+        reviewed_graph["edges"] = [
+            reviewed_by_pair.get((edge["from"], edge["to"]), edge)
+            for edge in preliminary["edges"]
         ]
         graph, validation_messages = validate_graph(reviewed_graph)
         status = "ok"

@@ -67,6 +67,26 @@ def _id_filter(chunk_ids: list[int]) -> str:
     return "chunk_id IN (" + ", ".join(map(str, ids)) + ")"
 
 
+def _mutate(operation) -> None:
+    """Run an idempotent mutation, refreshing a stale cross-process handle once.
+
+    LanceDB handles can occasionally surface ``EIO`` after another Study Buddy
+    process commits a new manifest. Reopening the table is safe here because all
+    callers use idempotent delete/add or deterministic update operations.
+    """
+    try:
+        table = _table()
+        with _write_lock():
+            operation(table)
+    except OSError as error:
+        if error.errno != 5:
+            raise
+        _table.cache_clear()
+        table = _table()
+        with _write_lock():
+            operation(table)
+
+
 def add_chunks(rows: list[dict]):
     """rows: chunk_id, item_id, subject, source_label, text, ts_start, page, image_path."""
     if not rows:
@@ -78,25 +98,25 @@ def add_chunks(rows: list[dict]):
         r.setdefault("page", None)
         r.setdefault("image_path", None)
     chunk_ids = [int(row["chunk_id"]) for row in rows]
-    table = _table()
-    with _write_lock():
+    def write(table):
         # Retrying a completed SQLite write must not duplicate its vectors.
         table.delete(_id_filter(chunk_ids))
         table.add(rows)
+    _mutate(write)
 
 
 def delete_chunks(chunk_ids: list[int]) -> None:
     if not chunk_ids:
         return
-    table = _table()
-    with _write_lock():
+    def delete(table):
         table.delete(_id_filter(chunk_ids))
+    _mutate(delete)
 
 
 def update_item_subject(item_id: int, subject: str) -> None:
-    table = _table()
-    with _write_lock():
+    def update(table):
         table.update({"subject": subject}, where=f"item_id = {int(item_id)}")
+    _mutate(update)
 
 
 def search(query: str, subject: str | None = None, k: int = 8) -> list[dict]:
