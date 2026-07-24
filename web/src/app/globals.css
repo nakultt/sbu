@@ -343,7 +343,16 @@ textarea::placeholder {
   }
 
   .study-note p { margin: 0.75rem 0; }
-  .study-note strong { font-weight: 720; }
+  .study-note strong,
+  .study-note-highlight {
+    padding: 0.05em 0.18em;
+    border-radius: 0.2em;
+    color: inherit;
+    font-weight: 720;
+    background: color-mix(in srgb, var(--brand) 28%, transparent);
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
   .study-note a {
     color: var(--brand);
     font-weight: 620;

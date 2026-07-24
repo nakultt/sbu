@@ -7,6 +7,29 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class MarkdownParserTest {
+    @Test
+    fun parsesImportantTermHighlights() {
+        val blocks = MarkdownParser.parse("Apply ==Ohm's law==. ==Current remains constant in a series circuit.==")
+
+        assertEquals(
+            listOf(
+                MdBlock.Paragraph(
+                    listOf(
+                        MdInline.Text("Apply "),
+                        MdInline.Highlight("Ohm's law"),
+                        MdInline.Text(". "),
+                        MdInline.Highlight("Current remains constant in a series circuit."),
+                    )
+                )
+            ),
+            blocks,
+        )
+        assertEquals(
+            "Apply Ohm's law. Current remains constant in a series circuit.",
+            MarkdownParser.strip("Apply ==Ohm's law==. ==Current remains constant in a series circuit.=="),
+        )
+    }
+
 
     @Test
     fun headingLosesHashes() {

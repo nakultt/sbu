@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.sp
 /** Inline fragments of a single markdown line. */
 sealed interface MdInline {
     data class Text(val text: String) : MdInline
+    data class Highlight(val text: String) : MdInline
     data class Bold(val text: String) : MdInline
     data class Italic(val text: String) : MdInline
     data class Code(val text: String) : MdInline
@@ -108,6 +109,7 @@ object MarkdownParser {
     private fun flatten(inlines: List<MdInline>): String = inlines.joinToString("") {
         when (it) {
             is MdInline.Text -> it.text
+            is MdInline.Highlight -> it.text
             is MdInline.Bold -> it.text
             is MdInline.Italic -> it.text
             is MdInline.Code -> it.text
@@ -136,6 +138,16 @@ object MarkdownParser {
                         i = close + 1
                     } else {
                         plain.append(c); i++
+                    }
+                }
+                c == '=' && i + 1 < text.length && text[i + 1] == '=' -> {
+                    val close = text.indexOf("==", i + 2)
+                    if (close != -1 && text.substring(i + 2, close).isNotBlank()) {
+                        flush()
+                        out += MdInline.Highlight(text.substring(i + 2, close))
+                        i = close + 2
+                    } else {
+                        plain.append(c).append(c); i += 2
                     }
                 }
                 c == '[' -> {
@@ -197,7 +209,14 @@ private fun annotate(inlines: List<MdInline>, colors: AxiomColors): AnnotatedStr
         inlines.forEach { inline ->
             when (inline) {
                 is MdInline.Text -> append(inline.text)
-                is MdInline.Bold -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(inline.text) }
+                is MdInline.Highlight -> withStyle(
+                    SpanStyle(fontWeight = FontWeight.Medium, background = colors.accent.copy(alpha = 0.24f))
+                ) { append(inline.text) }
+                // Older generated notes used bold lead terms before explicit ==highlights==
+                // were introduced, so render them with the same visual emphasis.
+                is MdInline.Bold -> withStyle(
+                    SpanStyle(fontWeight = FontWeight.SemiBold, background = colors.accent.copy(alpha = 0.24f))
+                ) { append(inline.text) }
                 is MdInline.Italic -> withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(inline.text) }
                 is MdInline.Code -> withStyle(
                     SpanStyle(fontFamily = Mono, color = colors.accent, background = colors.panel2)

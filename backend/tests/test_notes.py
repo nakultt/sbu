@@ -113,6 +113,24 @@ class GenerateNotesVisualTests(unittest.TestCase):
         self.assertIn("![Board](/api/video/frames/7/image)", notes)
         self.assertNotIn("Important lecture visuals", notes)
 
+    def test_llm_selects_and_persists_important_term_highlights(self):
+        calls = []
+
+        def generate(system, user, **kwargs):
+            calls.append((system, user))
+            return "## Summary\n\n==Ohm's law== relates voltage and current."
+
+        ingest.llm.chat = generate
+
+        notes = ingest._generate_notes(
+            "Ohm's law relates voltage and current.",
+            [{"text": "Ohm's law relates voltage and current."}],
+            "Circuits",
+        )
+
+        self.assertIn("==Ohm's law==", notes)
+        self.assertIn("or a short sentence when the complete statement is important", calls[0][0])
+
 
 class GeneratedNoteCleanupTests(unittest.TestCase):
     def test_removes_placeholder_references_but_preserves_real_sources_and_math(self):

@@ -7,6 +7,7 @@ import remarkMath from "remark-math";
 import { API } from "@/lib/api";
 import { cleanStudyMarkdown } from "@/lib/markdown";
 import { linkifySources, makeSourceAnchor, NoteContext } from "@/lib/noteLinks";
+import remarkHighlights from "@/lib/remarkHighlights";
 import MermaidDiagram from "@/components/MermaidDiagram";
 
 interface NoteMarkdownProps {
@@ -20,13 +21,14 @@ export default function NoteMarkdown({ markdown, ctx, onSeek }: NoteMarkdownProp
   const prepared = linkifySources(cleanStudyMarkdown(markdown), ctx.kind);
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkMath]}
+      remarkPlugins={[remarkGfm, remarkMath, remarkHighlights]}
       rehypePlugins={[rehypeKatex]}
       // Preserve our internal jump-to-source scheme; react-markdown would
       // otherwise strip the unknown protocol and blank the href.
       urlTransform={(url) => (url.startsWith("studysrc:") ? url : defaultUrlTransform(url))}
       components={{
         a: makeSourceAnchor(ctx, onSeek),
+        mark: ({ children }) => <mark className="study-note-highlight">{children}</mark>,
         img: ({ src, alt }) => (
           // eslint-disable-next-line @next/next/no-img-element
           <img
