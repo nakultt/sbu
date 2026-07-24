@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarDays, ExternalLink, Link2, RefreshCw, Unlink } from "lucide-react";
+import { ExternalLink, Link2, RefreshCw, Unlink } from "lucide-react";
 import CalendarWidget, { GoogleCalendarEvent } from "@/components/CalendarWidget";
-import PageShell from "@/components/PageShell";
+import { Panel, MonoLabel, GlowButton } from "@/components/ui";
 import { API, getJSON } from "@/lib/api";
 
 interface CalendarStatus {
@@ -70,8 +70,6 @@ export default function CalendarPage() {
   }, [refresh]);
 
   useEffect(() => {
-    // Note/file processing happens in the background. Poll only the small local
-    // proposal endpoint so newly detected dates appear without a page reload.
     const timer = window.setInterval(() => {
       getJSON<CalendarProposal[]>("/api/calendar/proposals").then(setProposals).catch(() => {});
     }, 3000);
@@ -150,95 +148,120 @@ export default function CalendarPage() {
   }
 
   return (
-    <PageShell title="Calendar" subtitle="Your Google Calendar events alongside your Study Buddy workspace.">
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3 surface p-4">
-        <div className="flex items-center gap-3">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-chip-purple">
-            <CalendarDays className="h-5 w-5 text-brand" />
-          </span>
-          <div>
-            <div className="text-sm font-semibold">Google Calendar</div>
-            <div className="text-xs text-muted">
-              {status?.connected
-                ? "Connected · events require your approval"
-                : status?.configured
-                  ? "Ready to connect"
-                  : "OAuth credentials need configuration"}
-            </div>
+    <section className="axscreen" style={{ padding: 32, display: "flex", flexDirection: "column", gap: 20, maxWidth: 1120 }}>
+      <div>
+        <MonoLabel size={11} spacing="0.24em" style={{ color: "var(--accent)", display: "block", marginBottom: 8 }}>
+          PLANNER
+        </MonoLabel>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 500 }}>Calendar</h1>
+        <p style={{ margin: "8px 0 0", color: "var(--dim)", fontSize: 14 }}>
+          Your Google Calendar events alongside your Study Buddy workspace.
+        </p>
+      </div>
+
+      {/* Google connection */}
+      <Panel style={{ padding: 16, display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div>
+          <MonoLabel size={11}>GOOGLE CALENDAR</MonoLabel>
+          <div style={{ fontSize: 12, color: "var(--dim)", marginTop: 4 }}>
+            {status?.connected
+              ? "Connected · events require your approval"
+              : status?.configured
+                ? "Ready to connect"
+                : "OAuth credentials need configuration"}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div style={{ display: "flex", gap: 8 }}>
           {status?.connected && (
-            <button onClick={syncAndRefresh} disabled={busy} className="rounded-xl border border-line p-2.5 text-muted" aria-label="Sync events and reminders">
+            <button onClick={syncAndRefresh} disabled={busy} style={{ border: "1px solid var(--line2)", padding: 10, color: "var(--dim)" }} aria-label="Sync events and reminders">
               <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
             </button>
           )}
           {status?.connected ? (
-            <button onClick={disconnect} disabled={busy} className="inline-flex items-center gap-2 rounded-xl border border-line px-4 py-2 text-sm font-medium">
-              <Unlink className="h-4 w-4" /> Disconnect
-            </button>
+            <GlowButton variant="ghost" onClick={disconnect} disabled={busy}>
+              <Unlink className="h-4 w-4" /> DISCONNECT
+            </GlowButton>
           ) : (
-            <button onClick={connect} disabled={busy || !status?.configured} className="button-primary disabled:opacity-50">
-              <Link2 className="h-4 w-4" /> Connect Google Calendar
-            </button>
+            <GlowButton onClick={connect} disabled={busy || !status?.configured}>
+              <Link2 className="h-4 w-4" /> CONNECT
+            </GlowButton>
           )}
         </div>
-      </div>
-      {message && <p className="mb-4 rounded-xl border border-line bg-panel px-4 py-3 text-sm" role="status">{message}</p>}
+      </Panel>
+
+      {message && (
+        <p role="status" style={{ margin: 0, border: "1px solid var(--line2)", padding: "10px 14px", fontSize: 13, color: "var(--dim)" }}>
+          {message}
+        </p>
+      )}
       {status?.connected && status.reminders.pending > 0 && (
-        <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        <p style={{ margin: 0, border: "1px solid #fbbf24", padding: "10px 14px", fontSize: 13, color: "#fbbf24" }}>
           {status.reminders.pending} approved reminder{status.reminders.pending === 1 ? " is" : "s are"} waiting to sync.
         </p>
       )}
+
+      {/* Proposals */}
       {proposals.length > 0 && (
-        <section className="mb-5 rounded-2xl border border-brand/20 bg-chip-purple p-4">
-          <h2 className="text-sm font-semibold">Calendar suggestions</h2>
-          <p className="mt-1 text-xs text-muted">Dates found in your study materials are never added automatically. Review each one.</p>
-          <div className="mt-3 space-y-3">
+        <Panel accent style={{ padding: 18 }}>
+          <MonoLabel style={{ display: "block" }}>CALENDAR SUGGESTIONS</MonoLabel>
+          <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--dim)" }}>
+            Dates found in your study materials are never added automatically. Review each one.
+          </p>
+          <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             {proposals.map((proposal) => (
-              <div key={proposal.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-panel px-3 py-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-medium">{proposal.title}</div>
-                  <div className="text-xs text-muted">{new Date(`${proposal.event_date}T00:00:00`).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })}{proposal.start_time ? ` · ${proposal.start_time}` : " · All day"} · from {proposal.filename}</div>
+              <div key={proposal.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 12, background: "var(--panel2)", padding: "12px 14px" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{proposal.title}</div>
+                  <MonoLabel size={9} spacing="0.1em" dim style={{ marginTop: 4, display: "block" }}>
+                    {new Date(`${proposal.event_date}T00:00:00`).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }).toUpperCase()}
+                    {proposal.start_time ? ` · ${proposal.start_time}` : " · ALL DAY"} · FROM {proposal.filename.toUpperCase()}
+                  </MonoLabel>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={() => void decideProposal(proposal.id, "approve")} disabled={busy || !status?.connected} className="rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">Add to Google</button>
-                  <button onClick={() => void decideProposal(proposal.id, "dismiss")} disabled={busy} className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium">Dismiss</button>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <GlowButton onClick={() => void decideProposal(proposal.id, "approve")} disabled={busy || !status?.connected} style={{ padding: "8px 12px", fontSize: 10 }}>
+                    ADD TO GOOGLE
+                  </GlowButton>
+                  <GlowButton variant="ghost" onClick={() => void decideProposal(proposal.id, "dismiss")} disabled={busy} style={{ padding: "8px 12px", fontSize: 10 }}>
+                    DISMISS
+                  </GlowButton>
                 </div>
               </div>
             ))}
           </div>
-          {!status?.connected && <p className="mt-3 text-xs text-muted">Connect Google Calendar to approve a suggestion.</p>}
-        </section>
+          {!status?.connected && <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--dim)" }}>Connect Google Calendar to approve a suggestion.</p>}
+        </Panel>
       )}
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,0.8fr)]">
+      {/* Grid + events */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, 0.8fr)", gap: 20, alignItems: "start" }}>
         <CalendarWidget month={month} events={events} onMonthChange={changeMonth} />
-        <div className="overflow-hidden surface">
-          <div className="border-b border-line px-4 py-3 text-sm font-semibold">Events this month</div>
-          {!status?.connected && <p className="p-4 text-sm text-muted">Connect Google Calendar to see your schedule.</p>}
-          {status?.connected && !busy && events.length === 0 && <p className="p-4 text-sm text-muted">No events this month.</p>}
+        <Panel>
+          <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)" }}>
+            <MonoLabel>EVENTS THIS MONTH</MonoLabel>
+          </div>
+          {!status?.connected && <p style={{ padding: 16, fontSize: 13, color: "var(--dim)" }}>Connect Google Calendar to see your schedule.</p>}
+          {status?.connected && !busy && events.length === 0 && <p style={{ padding: 16, fontSize: 13, color: "var(--dim)" }}>No events this month.</p>}
           {events.map((event) => (
-            <div key={event.id} className="border-b border-line px-4 py-3 last:border-0">
-              <div className="flex items-start gap-3">
-                <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{event.summary}</div>
-                  <div className="text-xs text-muted">
-                    {new Date(event.start).toLocaleDateString([], { month: "short", day: "numeric" })} · {eventTime(event)}
-                    {event.location ? ` · ${event.location}` : ""}
-                  </div>
+            <div key={event.id} style={{ padding: "13px 18px", borderBottom: "1px solid var(--line)" }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+                <span style={{ marginTop: 6, width: 6, height: 6, borderRadius: "50%", background: "var(--accent)", flexShrink: 0 }} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{event.summary}</div>
+                  <MonoLabel size={9} spacing="0.1em" dim style={{ marginTop: 3, display: "block" }}>
+                    {new Date(event.start).toLocaleDateString([], { month: "short", day: "numeric" }).toUpperCase()} · {eventTime(event).toUpperCase()}
+                    {event.location ? ` · ${event.location.toUpperCase()}` : ""}
+                  </MonoLabel>
                 </div>
                 {event.html_link && (
-                  <a href={event.html_link} target="_blank" rel="noreferrer" className="text-muted hover:text-brand" aria-label={`Open ${event.summary} in Google Calendar`}>
+                  <a href={event.html_link} target="_blank" rel="noreferrer" style={{ color: "var(--dim)" }} aria-label={`Open ${event.summary} in Google Calendar`}>
                     <ExternalLink className="h-4 w-4" />
                   </a>
                 )}
               </div>
             </div>
           ))}
-        </div>
+        </Panel>
       </div>
-    </PageShell>
+    </section>
   );
 }

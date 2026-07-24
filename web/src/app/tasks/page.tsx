@@ -1,16 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { CalendarPlus, CheckCircle2, Plus, Trash2 } from "lucide-react";
-import PageShell from "@/components/PageShell";
-import { API, getJSON, postJSON } from "@/lib/api";
-
-export interface Task {
-  id: number;
-  label: string;
-  due: string | null;
-  done: number;
-}
+import { CalendarPlus, Plus, Trash2 } from "lucide-react";
+import { Panel, MonoLabel, GlowButton, SectionHeader } from "@/components/ui";
+import { API, getJSON, postJSON, type Task } from "@/lib/api";
 
 export default function TasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -28,14 +21,22 @@ export default function TasksPage() {
   async function create(addToCalendar: boolean) {
     if (!label.trim()) return;
     try {
-      const result = await postJSON<{ calendar_added: boolean }>("/api/tasks", { label: label.trim(), due: due || null, add_to_calendar: addToCalendar });
+      const result = await postJSON<{ calendar_added: boolean }>("/api/tasks", {
+        label: label.trim(),
+        due: due || null,
+        add_to_calendar: addToCalendar,
+      });
       setLabel("");
       setDue("");
       setConfirmCalendar(false);
       setMessage(result.calendar_added ? "Task added to Google Calendar." : "Task added locally.");
       refresh();
     } catch {
-      setMessage(addToCalendar ? "The task was saved locally, but could not be added to Google Calendar. Check the Calendar connection and date." : "Could not add the task.");
+      setMessage(
+        addToCalendar
+          ? "The task was saved locally, but could not be added to Google Calendar. Check the Calendar connection and date."
+          : "Could not add the task.",
+      );
     }
   }
 
@@ -59,66 +60,132 @@ export default function TasksPage() {
     refresh();
   }
 
+  const fieldStyle: React.CSSProperties = {
+    background: "var(--panel2)",
+    border: "1px solid var(--line)",
+    color: "var(--text)",
+    padding: "10px 12px",
+    fontSize: 14,
+    outline: "none",
+  };
+
   return (
-    <PageShell title="Tasks" subtitle="Plan what matters, keep deadlines visible, and optionally add dated work to Google Calendar." eyebrow="Focus">
-      <div className="max-w-3xl surface p-4 sm:p-5">
-        {message && <p className="mb-4 rounded-xl bg-chip-purple px-3 py-2 text-sm text-brand" role="status">{message}</p>}
-        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_160px_auto]">
-          <input
-            value={label}
-            onChange={(e) => setLabel(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder="Add a task…"
-            className="field"
-          />
-          <input
-            value={due}
-            onChange={(e) => setDue(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && add()}
-            placeholder="Due (e.g. May 18)"
-            className="field"
-          />
-          <button
-            onClick={add}
-            className="button-primary"
-          >
-            <Plus className="h-4 w-4" /> Add task
-          </button>
+    <section className="axscreen" style={{ padding: 32, display: "flex", flexDirection: "column", gap: 22, maxWidth: 820 }}>
+      <div>
+        <MonoLabel size={11} spacing="0.24em" style={{ color: "var(--accent)", display: "block", marginBottom: 8 }}>
+          FOCUS
+        </MonoLabel>
+        <h1 style={{ margin: 0, fontSize: 26, fontWeight: 500 }}>Tasks</h1>
+        <p style={{ margin: "8px 0 0", color: "var(--dim)", fontSize: 14 }}>
+          Plan what matters, keep deadlines visible, and optionally add dated work to Google Calendar.
+        </p>
+      </div>
+
+      <Panel>
+        <SectionHeader title="Add a task" />
+        <div style={{ padding: 18 }}>
+          {message && (
+            <p
+              role="status"
+              style={{ margin: "0 0 14px", fontSize: 13, color: "var(--accent)", border: "1px solid var(--line2)", padding: "8px 12px" }}
+            >
+              {message}
+            </p>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 160px auto", gap: 8 }}>
+            <input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && add()}
+              placeholder="Add a task…"
+              style={fieldStyle}
+            />
+            <input
+              value={due}
+              onChange={(e) => setDue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && add()}
+              placeholder="Due (e.g. May 18)"
+              style={fieldStyle}
+            />
+            <GlowButton onClick={add}>
+              <Plus className="h-4 w-4" /> ADD
+            </GlowButton>
+          </div>
         </div>
-        <div className="mt-5 space-y-1 border-t border-line pt-4">
-          {tasks.length === 0 && <div className="flex flex-col items-center py-8 text-center"><CheckCircle2 className="h-7 w-7 text-muted/50" /><p className="mt-2 text-sm font-semibold">Your list is clear</p><p className="mt-1 text-xs text-muted">Add the next useful thing when it comes up.</p></div>}
+
+        <div style={{ borderTop: "1px solid var(--line)" }}>
+          {tasks.length === 0 && (
+            <div style={{ padding: "36px 0", textAlign: "center" }}>
+              <p style={{ margin: 0, fontSize: 14, fontWeight: 500 }}>Your list is clear</p>
+              <MonoLabel size={10} spacing="0.14em" dim style={{ marginTop: 6, display: "block" }}>
+                ADD THE NEXT USEFUL THING WHEN IT COMES UP
+              </MonoLabel>
+            </div>
+          )}
           {tasks.map((t) => (
-            <div key={t.id} className="group flex items-center gap-3 rounded-xl px-2 py-2.5 text-sm hover:bg-panel-muted">
-              <input
-                type="checkbox"
-                checked={!!t.done}
-                onChange={() => toggle(t)}
-                className="h-4 w-4 accent-brand"
-              />
-              <span className={`flex-1 ${t.done ? "text-muted line-through" : ""}`}>{t.label}</span>
-              {t.due && <span className="text-xs text-muted">{t.due}</span>}
+            <div
+              key={t.id}
+              style={{ display: "flex", alignItems: "center", gap: 16, padding: "15px 22px", borderBottom: "1px solid var(--line)" }}
+            >
               <button
-                onClick={() => remove(t.id)}
-                className="rounded-lg p-1.5 text-muted opacity-60 hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
-                aria-label="Delete task"
+                onClick={() => toggle(t)}
+                aria-label={t.done ? "Mark incomplete" : "Mark complete"}
+                style={{
+                  width: 16,
+                  height: 16,
+                  border: `1px solid ${t.done ? "var(--accent)" : "var(--line2)"}`,
+                  background: t.done ? "var(--accent)" : "transparent",
+                  flexShrink: 0,
+                  display: "grid",
+                  placeItems: "center",
+                  color: "var(--bg)",
+                  fontSize: 11,
+                }}
               >
+                {t.done ? "✓" : ""}
+              </button>
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: 14,
+                  color: t.done ? "var(--faint)" : "var(--text)",
+                  textDecoration: t.done ? "line-through" : "none",
+                }}
+              >
+                {t.label}
+              </span>
+              {t.due && (
+                <MonoLabel size={10} spacing="0.1em" dim>
+                  {t.due}
+                </MonoLabel>
+              )}
+              <button onClick={() => remove(t.id)} style={{ padding: 6, color: "var(--dim)" }} aria-label="Delete task">
                 <Trash2 className="h-4 w-4" />
               </button>
             </div>
           ))}
         </div>
-      </div>
+      </Panel>
+
       {confirmCalendar && (
-        <div className="mt-4 max-w-3xl rounded-2xl border border-brand/20 bg-chip-purple p-4 sm:p-5">
-          <p className="flex items-center gap-2 text-sm font-semibold"><CalendarPlus className="h-4 w-4 text-brand" /> Add this dated task to Google Calendar?</p>
-          <p className="mt-1 text-sm text-muted">“{label.trim()}” is due {due.trim()}. Your choice is required before a calendar event is created.</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button onClick={() => void create(true)} className="button-primary">Yes, add it</button>
-            <button onClick={() => void create(false)} className="button-secondary">No, keep local</button>
-            <button onClick={() => setConfirmCalendar(false)} className="px-2 text-sm text-muted">Cancel</button>
+        <Panel accent style={{ padding: 20 }}>
+          <p style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 500, margin: 0 }}>
+            <CalendarPlus className="h-4 w-4" style={{ color: "var(--accent)" }} /> Add this dated task to Google Calendar?
+          </p>
+          <p style={{ margin: "6px 0 0", fontSize: 13, color: "var(--dim)" }}>
+            &ldquo;{label.trim()}&rdquo; is due {due.trim()}. Your choice is required before a calendar event is created.
+          </p>
+          <div style={{ marginTop: 14, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <GlowButton onClick={() => void create(true)}>YES, ADD IT</GlowButton>
+            <GlowButton variant="ghost" onClick={() => void create(false)}>
+              NO, KEEP LOCAL
+            </GlowButton>
+            <button onClick={() => setConfirmCalendar(false)} style={{ padding: "0 8px", fontSize: 13, color: "var(--dim)" }}>
+              Cancel
+            </button>
           </div>
-        </div>
+        </Panel>
       )}
-    </PageShell>
+    </section>
   );
 }
