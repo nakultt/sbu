@@ -29,6 +29,40 @@ The API listens on port 8010 by default:
 - Liveness: `http://127.0.0.1:8010/api/health/live`
 - Readiness: `http://127.0.0.1:8010/api/health/ready`
 
+## Study pet
+
+A floating desktop creature that notices when you drift into distraction and
+nudges you back, using your real tasks, deadlines and weak concepts.
+
+```bash
+cd backend && uv run --python 3.12 python -m pet
+```
+
+It samples the frontmost application every five seconds and, for Safari,
+Chrome, Arc and Brave, the active tab. macOS asks once for permission to
+control each browser; without it the pet still works from the application name
+alone. Nothing is written to disk and nothing leaves the machine —
+classification and dialogue both run through local LM Studio, and the activity
+log is a 200-entry in-memory ring.
+
+Escalation, by continuous distraction: 90s it turns alert, 3 min it walks to
+the offending window and speaks, 6 min it names what is actually due, 10 min it
+pleads and repeats every 4 min. A minute of real study resets it. Two bubbles
+are never closer than 90 seconds. Pause from the 🐾 menu bar before screen
+sharing.
+
+Every threshold is configurable; see the `PET_*` variables in
+`.env.docker.example`. To watch the whole ladder in under a minute:
+
+```bash
+PET_NOTICE_SECONDS=10 PET_CONCERNED_SECONDS=20 PET_NAG_SECONDS=30 PET_PLEAD_SECONDS=40 PET_BUBBLE_COOLDOWN=10 PET_PLEAD_REPEAT_SECONDS=20 PET_RECOVERY_SECONDS=10 uv run --python 3.12 python -m pet
+```
+
+Sprites live in `assets/pet/`. Replace the PNGs and `meta.json` with real
+artwork — same frame size and file names — and nothing else changes.
+Regenerate the placeholders with
+`uv run --python 3.12 python -m scripts.gen_pet_sprites`.
+
 ## RAG reranking
 
 Ask My Notes retrieves a broad LanceDB candidate set and reranks it with

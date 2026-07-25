@@ -12,7 +12,10 @@ from core import llm
 from pet.models import ContextSnapshot, NudgeEvent, Stage
 
 MAX_CHARS = 120
-TIMEOUT = 1.5
+# Measured against qwen3-4b on this machine: 1.5s fell back to canned lines
+# often enough to be noticeable. Must stay comfortably under one poll so a slow
+# model delays a bubble rather than stalling the loop.
+TIMEOUT = 2.5
 
 CANNED: dict[str, tuple[str, ...]] = {
     Stage.CONCERNED.value: (
@@ -37,10 +40,16 @@ CANNED: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# Small local models happily answer with a paraphrase of their own instructions
+# ("I am warm and a little pointed..."), so the tone is described in the third
+# person and the reply format is stated last, where it sticks best.
 _TONE = (
-    "You are a small desktop pet that keeps a student studying. Write exactly one "
-    "short sentence, under 110 characters, no markdown, no quotes, no emoji. Be warm "
-    "and a little pointed. Never insult the student. Mention only what you are told."
+    "A small desktop pet nudges a student back to studying. It speaks warmly, "
+    "with a light edge, and never insults the student. It refers only to the "
+    "activity and coursework it is given.\n\n"
+    "Write the single sentence the pet says out loud. Under 90 characters. "
+    "No markdown, no quotes, no emoji, no preamble, no mention of these "
+    "instructions. Reply with that sentence and nothing else."
 )
 
 _STAGE_INTENT = {
