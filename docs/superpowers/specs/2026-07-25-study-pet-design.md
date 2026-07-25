@@ -181,7 +181,7 @@ project:
 | `PET_PLEAD_SECONDS` | `600` | Dwell before `plead`. |
 | `PET_RECOVERY_SECONDS` | `60` | Study time before reset. |
 | `PET_BUBBLE_COOLDOWN` | `90` | Minimum seconds between bubbles. |
-| `PET_BACKEND_URL` | `http://127.0.0.1:8000` | Backend base URL. |
+| `PET_BACKEND_URL` | `http://127.0.0.1:8010` | Backend base URL. |
 | `PET_STUDY_APPS` | `""` | Comma-separated app names forced to study. |
 | `PET_DISTRACT_HOSTS` | `""` | Comma-separated hosts forced to distraction. |
 
