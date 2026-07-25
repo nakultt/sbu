@@ -1,4 +1,8 @@
-<![CDATA[# Study Buddy
+<![CDATA[<p align="center">
+  <img src="docs/images/pet.png" alt="Study Buddy mascot" width="200" />
+</p>
+
+# Study Buddy
 
 > A local-first personal learning workspace for capturing, organizing,
 > searching, and transforming study material — powered by on-device AI.
