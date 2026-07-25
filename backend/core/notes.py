@@ -15,6 +15,9 @@ from core import db, vectorstore
 NOTES_SUFFIX = " — notes"
 
 _TOKEN = re.compile(r"^[ \t]*\[\[FIG:(\d+)\]\][ \t]*$", re.MULTILINE)
+# A token the model left mid-sentence, or echoed back as a manifest listing.
+_ECHOED_TOKEN_LINE = re.compile(r"^[ \t]*(?:[-*+][ \t]+)?\[\[FIG:\d+\]\].*$", re.MULTILINE)
+_INLINE_TOKEN = re.compile(r"[ \t]*\[\[FIG:\d+\]\][ \t]*")
 _TS = re.compile(r"\[@\s*(?:(\d+):)?(\d+):(\d{2})\]")
 _PAGE_N = re.compile(r"\[p\.\s*(\d+)\]")
 
@@ -83,10 +86,23 @@ def _anchor_index(lines: list[str], anchor) -> int | None:
     return None
 
 
+def strip_placement_tokens(markdown: str) -> str:
+    """Remove ``[[FIG:n]]`` markers the placement pass could not turn into images.
+
+    A raw token is placement scaffolding, never something a reader should see.
+    Lines that merely echo the manifest back are dropped whole; a token used
+    mid-sentence is deleted in place so the sentence still reads.
+    """
+    cleaned = _ECHOED_TOKEN_LINE.sub("", markdown)
+    cleaned = _INLINE_TOKEN.sub(" ", cleaned)
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
 def place_visuals(markdown: str, visuals: list[dict]) -> str:
     """Swap emitted tokens for images; inline the rest at their anchor (no section)."""
     if not visuals:
-        return markdown
+        return strip_placement_tokens(markdown)
     by_id = {v["token_id"]: v for v in visuals}
     placed: set[int] = set()
 
@@ -102,9 +118,9 @@ def place_visuals(markdown: str, visuals: list[dict]) -> str:
 
     leftovers = [v for v in visuals if v["token_id"] not in placed]
     if not leftovers:
-        return out
+        return strip_placement_tokens(out)
 
-    lines = out.split("\n")
+    lines = strip_placement_tokens(out).split("\n")
     trailing = []
     for visual in leftovers:
         index = _anchor_index(lines, visual.get("anchor"))

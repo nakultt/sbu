@@ -34,7 +34,9 @@ Rules:
   acceleration" or "forgets to convert units". Never leave it empty.
 - The correct option's "misconception" is an empty string.
 - Wrong options must be plausible, similar in length and form to the correct one.
-- When source notes are supplied, the question must be answerable from them.
+- The question must be answerable from the supplied source notes alone. Never test
+  a fact, formula, or case the notes do not contain, even if it is standard for
+  the subject.
 - Test understanding, not recall of trivia.
 """
 
@@ -117,10 +119,14 @@ def generate(concept_id: int) -> int:
     if concept is None:
         raise ValueError(f"unknown concept {concept_id}")
     context, _ = _context_for(concept_id)
+    if not context:
+        # Without the student's own notes there is nothing legitimate to test, and
+        # inventing a question from general knowledge is exactly what this must not do.
+        raise ValueError(f"concept {concept_id} has no source notes to write from")
 
-    prompt = f"Concept: {concept['name']}\n{concept['blurb']}\n\n"
-    prompt += f"Source notes:\n\n{context}" if context else (
-        "No source notes are available; use accurate general knowledge."
+    prompt = (
+        f"Concept: {concept['name']}\n{concept['blurb']}\n\n"
+        f"Source notes:\n\n{context}"
     )
     payload = llm.chat_json(QUESTION_SYSTEM, prompt, max_tokens=900)
     return _persist(concept_id, _parse(payload))

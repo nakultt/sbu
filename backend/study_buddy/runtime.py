@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -76,6 +77,25 @@ def run() -> None:
     """Start every configured backend component from one command."""
     configure_logging()
     supervisor = ProcessSupervisor()
+
+    def terminate(signum: int, _frame: object) -> None:
+        """Stop companion processes when the launcher is signalled to exit.
+
+        uvicorn captures SIGTERM/SIGHUP itself, and once its own graceful
+        shutdown finishes it restores the previous handler and re-raises the
+        signal. Without this handler that re-raise hits Python's default
+        disposition, which kills the launcher outright: the ``finally`` below
+        never runs and the menubar/telegram children are reparented to init.
+        The orphaned bot keeps polling, so the next start dies on Telegram's
+        "terminated by other getUpdates" conflict.
+        """
+        supervisor.stop()
+        logger.info("Study Buddy backend stopped")
+        logging.shutdown()
+        os._exit(128 + signum)
+
+    for received in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(received, terminate)
 
     logger.info(
         "starting Study Buddy backend",

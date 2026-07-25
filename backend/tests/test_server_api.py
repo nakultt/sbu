@@ -119,6 +119,24 @@ class UploadApiTests(unittest.TestCase):
             "url": "/api/doc/figures/graph.png",
         }])
 
+    def test_note_download_returns_a_named_pdf(self):
+        subject_id = db.get_or_create_subject("Physics")
+        item_id = db.add_item("waves.txt", "/tmp/waves.txt", "text")
+        db.set_item_meta(item_id, "Wave Motion", subject_id)
+        note_id = db.add_note(
+            item_id,
+            "# Wave Motion\n\n## Summary\n\nA wave transfers **energy**.\n\n"
+            "| Quantity | Unit |\n| --- | --- |\n| Frequency | Hz |",
+        )
+
+        response = self.client.get(f"/api/notes/{note_id}/download")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        self.assertIn('filename="Wave Motion.pdf"', response.headers["content-disposition"])
+        self.assertTrue(response.content.startswith(b"%PDF-"))
+        self.assertGreater(len(response.content), 1000)
+
     @patch("server.vectorstore.delete_chunks")
     def test_delete_note_keeps_source_but_removes_note_chunks(self, delete_chunks):
         subject_id = db.get_or_create_subject("Computer Science")

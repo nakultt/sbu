@@ -14,7 +14,7 @@ import traceback
 from datetime import date, datetime
 from pathlib import Path
 
-from core import db, llm, vectorstore
+from core import db, llm, mathmd, vectorstore
 from core.config import FILES_DIR, INBOX_DIR, kind_of
 
 logger = logging.getLogger(__name__)
@@ -65,6 +65,35 @@ NOTE_SECTION_ORDER = (
 )
 NOTE_SECTION_ALIASES = {section.casefold(): section for section in NOTE_SECTION_ORDER}
 
+# Each source part is summarized independently, so a long lecture yields one
+# near-identical Summary (and overlapping Key concepts) per part. Concatenating
+# them makes a note many times longer than the material warrants, so multi-part
+# notes get a merge pass per section before assembly.
+NOTES_CONDENSE_SYSTEM = (
+    "You merge draft study-note fragments that were written independently from consecutive parts "
+    "of one document, so they overlap heavily and restate the same points in different words. "
+    "Rewrite them as a single non-repetitive section using only facts present in the fragments — "
+    "never add background, examples, or context of your own. Merge restatements into one "
+    "statement, keep every genuinely distinct fact, and drop filler and conclusions. Preserve the "
+    "fragments' formatting: prose stays prose, bullets stay bullets with their bold lead terms, "
+    "mathematical notation stays in its LaTeX delimiters, and existing timestamps or page "
+    "references stay on the fact they belong to. Keep any [[FIG:n]] token on its own line, at most "
+    "once each, and never invent one. Write no heading. Output only the merged Markdown body."
+)
+# Per-section shape rules for the merge pass. A section absent here (Detailed
+# notes) is merged windowed instead, to compress repetition without flattening
+# the per-part detail that section exists to carry.
+NOTE_CONDENSE_GUIDANCE = {
+    "Summary": "Write one paragraph of 3-5 sentences covering the whole document. No bullets.",
+    "Key concepts": "Output at most 12 bullets, one distinct concept each, with a bold lead term.",
+    "Formulas and definitions": (
+        "Output one bullet per distinct formula or definition. Drop exact repeats, and keep each "
+        "formula verbatim."
+    ),
+}
+CONDENSE_INPUT_CHARS = 12000
+CONDENSE_WINDOW_CHARS = 8000
+
 PLACEHOLDER_REFERENCE = re.compile(
     r"\s*\[(?:@\s*)?(?:mm:ss|p\.\s*N)\]",
     re.IGNORECASE,
@@ -90,6 +119,9 @@ def _clean_generated_markdown(markdown: str) -> str:
     cleaned = DECORATIVE_SYMBOL.sub("", cleaned)
     cleaned = DECORATIVE_BULLET.sub(r"\1- ", cleaned)
     cleaned = re.sub(r"^(\s*)\*\s+", r"\1- ", cleaned, flags=re.MULTILINE)
+    # Models mix $…$, \(…\), ```math fences and bare \frac{} in one document.
+    # Every reader (web KaTeX, the PDF exporter, mobile) expects one dialect.
+    cleaned = mathmd.normalize(cleaned)
     cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
 
@@ -101,7 +133,81 @@ def _safe_markdown_title(title: str) -> str:
     return title or "Study notes"
 
 
-def _assemble_structured_notes(title: str, generated_parts: list[str]) -> str:
+def _dedupe_lines(blocks: list[str]) -> list[str]:
+    """Drop lines separate parts emitted verbatim, keeping first occurrence and order."""
+    seen: set[str] = set()
+    out = []
+    for block in blocks:
+        kept, fenced = [], False
+        for line in block.split("\n"):
+            if line.lstrip().startswith("```"):
+                fenced = not fenced
+                kept.append(line)
+                continue
+            key = re.sub(r"[^a-z0-9]+", " ", line.casefold()).strip()
+            # Blank lines, fenced content and very short lines are structural.
+            if fenced or len(key) < 25:
+                kept.append(line)
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(line)
+        body = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+        if body:
+            out.append(body)
+    return out
+
+
+def _condense_section(section: str, blocks: list[str]) -> str:
+    """Merge one section's per-part fragments into a single non-repetitive body."""
+    guidance = NOTE_CONDENSE_GUIDANCE.get(section)
+    body = "\n\n".join(blocks)
+    if len(blocks) < 2:
+        return body
+
+    if guidance:
+        windows = [body[:CONDENSE_INPUT_CHARS]]
+    else:
+        # No global shape to impose: merge in windows so distinct detail and its
+        # order survive while adjacent restatements collapse.
+        guidance = (
+            "Merge only the points that repeat each other. Keep every distinct detail, in the "
+            "order given, as short bullets."
+        )
+        windows, current = [], ""
+        for block in blocks:
+            if current and len(current) + len(block) > CONDENSE_WINDOW_CHARS:
+                windows.append(current)
+                current = block
+            else:
+                current = f"{current}\n\n{block}" if current else block
+        if current:
+            windows.append(current)
+        if len(windows) == len(blocks):
+            return body  # nothing to merge; each block already stands alone
+
+    merged = []
+    for window in windows:
+        try:
+            result = llm.chat(
+                NOTES_CONDENSE_SYSTEM,
+                f"Section: {section}\n{guidance}\n\nFragments:\n{window}",
+                max_tokens=1200,
+            )
+        except Exception:
+            logger.exception("Could not condense note section %r; keeping fragments", section)
+            return body
+        result = _clean_generated_markdown(result)
+        result = re.sub(r"^#{1,6}\s+.*$", "", result, flags=re.MULTILINE).strip()
+        if not result:
+            return body
+        merged.append(result)
+    return "\n\n".join(merged)
+
+
+def _assemble_structured_notes(title: str, generated_parts: list[str],
+                               condense: bool = False) -> str:
     """Merge repeated LLM section headings into one predictable note document."""
     collected = {section: [] for section in NOTE_SECTION_ORDER}
 
@@ -127,8 +233,12 @@ def _assemble_structured_notes(title: str, generated_parts: list[str]) -> str:
 
     document = [f"# {_safe_markdown_title(title)}"]
     for section in NOTE_SECTION_ORDER:
-        if collected[section]:
-            document.extend([f"## {section}", "\n\n".join(collected[section])])
+        blocks = _dedupe_lines(collected[section])
+        if not blocks:
+            continue
+        body = _condense_section(section, blocks) if condense else "\n\n".join(blocks)
+        if body:
+            document.extend([f"## {section}", body])
     return "\n\n".join(document)
 
 CALENDAR_SYSTEM = (
@@ -376,7 +486,9 @@ def _generate_notes(full_text: str, chunks: list[dict], title: str = "Study note
             f"Source material:\n{part}{manifest}"
         )
         sections.append(llm.chat(NOTES_SYSTEM, prompt, max_tokens=1800))
-    notes = _assemble_structured_notes(title, sections)
+    # One part cannot repeat itself across parts, so skip the merge pass and its
+    # cost for short sources.
+    notes = _assemble_structured_notes(title, sections, condense=len(sections) > 1)
     diagrams = [
         chunk["diagram_result"] for chunk in chunks if chunk.get("diagram_result")
     ]

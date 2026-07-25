@@ -1,8 +1,9 @@
 """Build an exam's concept graph and bind each concept to the student's notes.
 
-The graph comes from the local LLM given nothing but an exam name, then every
-concept is bound to real chunks by vector search — so the map is grounded in the
-material the student actually owns, and study/RAG steps have something to cite.
+The graph is extracted *from the student's own notes* — the exam name only picks
+which notes to read. Every concept is then bound to real chunks by vector search,
+and anything that binds to nothing is dropped. So the map never grows topics the
+student has no material for, and study/RAG steps always have something to cite.
 """
 from __future__ import annotations
 
@@ -19,7 +20,12 @@ MAX_CONCEPTS = 60
 SOURCES_PER_CONCEPT = 5
 MAX_TIER_DEPTH = 12
 
-GRAPH_SYSTEM = """You map an exam syllabus into a prerequisite graph of concepts.
+NOTE_CHARS = 2600      # how much of one note goes into the digest
+BATCH_CHARS = 12000    # how much material goes to the model in one pass
+MAX_BATCHES = 6        # a ceiling on build time for a large library
+
+GRAPH_SYSTEM = """You read a student's own study notes and map what those notes
+teach into a prerequisite graph of concepts.
 
 Return one JSON object with this exact shape:
 {"concepts": [{"name": "Concept name",
@@ -27,8 +33,15 @@ Return one JSON object with this exact shape:
                "prerequisites": ["Other concept name", ...]}]}
 
 Rules:
-- Produce between 20 and 45 concepts covering the whole exam, not just the basics.
-- Names are short noun phrases, unique, and title-cased.
+- Every concept MUST be taught by the supplied notes. Never add a topic from your
+  own knowledge of the subject, however standard or expected it is: if the notes
+  do not cover it, it does not belong in the graph.
+- Do not broaden a concept beyond what the notes say, and do not split one idea
+  into a syllabus of sub-topics the notes never mention.
+- Returning few concepts is correct when the notes teach few. Never pad the list
+  to look complete.
+- Name each concept with the wording the notes use. Names are short noun phrases,
+  unique, and title-cased.
 - "prerequisites" lists ONLY names that also appear in this same concepts array.
 - The prerequisite relation must be acyclic: a concept never depends on something
   that depends on it, directly or indirectly.
@@ -145,16 +158,16 @@ def _assign_tiers(names: list[str], prereqs: dict[str, list[str]]) -> dict[str, 
     return tiers
 
 
-def _parse_graph(payload: dict) -> tuple[list[dict], dict[str, list[str]]]:
-    raw = payload.get("concepts") or []
-    seen: dict[str, dict] = {}
-    for entry in raw:
+def _parse_entries(payload: dict) -> list[dict]:
+    """The usable concepts in one model response, deduplicated within that response."""
+    entries: dict[str, dict] = {}
+    for entry in payload.get("concepts") or []:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()[:120]
-        if not name or name.lower() in {key.lower() for key in seen}:
+        if not name or name.lower() in entries:
             continue
-        seen[name] = {
+        entries[name.lower()] = {
             "name": name,
             "blurb": str(entry.get("blurb") or "").strip()[:300],
             "prerequisites": [
@@ -163,32 +176,128 @@ def _parse_graph(payload: dict) -> tuple[list[dict], dict[str, list[str]]]:
                 if str(p).strip()
             ],
         }
-        if len(seen) >= MAX_CONCEPTS:
-            break
-    if not seen:
-        raise ValueError("the model returned no usable concepts")
+    return list(entries.values())
 
-    # Keep only prerequisite names that resolve, case-insensitively.
-    canonical = {name.lower(): name for name in seen}
-    prereqs = {
-        name: [
+
+def _resolve_prereqs(entries: list[dict]) -> dict[str, list[str]]:
+    """Drop prerequisite names that no concept in the graph answers to."""
+    canonical = {entry["name"].lower(): entry["name"] for entry in entries}
+    return {
+        entry["name"]: [
             canonical[p.lower()]
             for p in entry["prerequisites"]
-            if p.lower() in canonical and canonical[p.lower()] != name
+            if p.lower() in canonical and canonical[p.lower()] != entry["name"]
         ]
-        for name, entry in seen.items()
+        for entry in entries
     }
-    return list(seen.values()), prereqs
+
+
+# ── The student's material ────────────────────────────────────────────────
+
+def _condense(markdown: str, budget: int) -> str:
+    """A note squeezed into `budget` characters, headings first.
+
+    Headings are the note's own topic list, so they survive truncation even when
+    the body does not.
+    """
+    lines = markdown.splitlines()
+    headings = [line.strip() for line in lines if line.lstrip().startswith("#")]
+    head = "\n".join(headings)[: budget // 2]
+    body = " ".join(markdown.split())[: max(0, budget - len(head))]
+    return f"{head}\n{body}".strip()
+
+
+def _study_material(name: str) -> list[str]:
+    """The student's notes as digest blocks, narrowed to the goal's folder if one matches."""
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT notes.markdown, items.title, subjects.name AS subject "
+            "FROM notes JOIN items ON items.id = notes.item_id "
+            "LEFT JOIN subjects ON subjects.id = items.subject_id "
+            "ORDER BY notes.created_at"
+        ).fetchall()
+
+    needle = name.strip().lower()
+    scoped = [
+        row for row in rows
+        if row["subject"] and (
+            needle in row["subject"].lower() or row["subject"].lower() in needle
+        )
+    ]
+    # Only narrow when the folder holds enough to build a map from.
+    if len(scoped) >= 2:
+        rows = scoped
+
+    blocks = []
+    for row in rows:
+        text = _condense(row["markdown"] or "", NOTE_CHARS)
+        if not text:
+            continue
+        label = row["title"] or "Untitled note"
+        blocks.append(f"### {label}\n{text}")
+    return blocks
+
+
+def _batches(blocks: list[str]) -> list[str]:
+    """Group note digests into passes that each fit comfortably in one prompt."""
+    batches: list[str] = []
+    current: list[str] = []
+    size = 0
+    for block in blocks:
+        if current and size + len(block) > BATCH_CHARS:
+            batches.append("\n\n".join(current))
+            current, size = [], 0
+        current.append(block)
+        size += len(block)
+    if current:
+        batches.append("\n\n".join(current))
+    return batches[:MAX_BATCHES]
+
+
+def _extract(name: str, batches: list[str]) -> list[dict]:
+    """Walk the notes and collect the concepts they teach, carrying names forward."""
+    found: dict[str, dict] = {}
+    for index, batch in enumerate(batches):
+        prompt = (
+            f"The student is revising for: {name}\n\n"
+            f"Their notes (part {index + 1} of {len(batches)}):\n\n{batch}\n\n"
+        )
+        if found:
+            prompt += (
+                "Concepts already extracted from earlier parts — reuse these names "
+                "exactly when the same idea reappears and cite them as prerequisites "
+                "where they apply, but do not list them again as new concepts:\n"
+                + ", ".join(entry["name"] for entry in found.values())
+                + "\n\n"
+            )
+        prompt += "Extract only the concepts these notes actually teach."
+
+        try:
+            payload = llm.chat_json(GRAPH_SYSTEM, prompt, max_tokens=3000)
+        except Exception:  # one bad pass must not lose the rest of the library
+            logger.warning("concept extraction failed for notes batch %d", index + 1)
+            continue
+
+        for entry in _parse_entries(payload):
+            found.setdefault(entry["name"].lower(), entry)
+            if len(found) >= MAX_CONCEPTS:
+                return list(found.values())
+    return list(found.values())
 
 
 def build(goal_id: int, name: str) -> None:
-    """Generate the graph, persist it, and bind concepts to the student's chunks."""
-    payload = llm.chat_json(
-        GRAPH_SYSTEM,
-        f"Exam or subject: {name}\n\nMap it into a prerequisite concept graph.",
-        max_tokens=4000,
-    )
-    entries, prereqs = _parse_graph(payload)
+    """Extract the graph from the student's notes, persist it, and bind its sources."""
+    blocks = _study_material(name)
+    if not blocks:
+        raise ValueError(
+            "There are no notes to build a map from. Add study material first, "
+            "then set the goal."
+        )
+
+    entries = _extract(name, _batches(blocks))
+    if not entries:
+        raise ValueError("the model found no usable concepts in your notes")
+    prereqs = _resolve_prereqs(entries)
     tiers = _assign_tiers([e["name"] for e in entries], prereqs)
 
     ordered = sorted(entries, key=lambda e: (tiers.get(e["name"], 0), e["name"]))
@@ -216,11 +325,44 @@ def build(goal_id: int, name: str) -> None:
             ],
         )
 
-    mastery.ensure_rows(list(ids.values()))
     bind_sources(goal_id)
+    _prune_ungrounded(goal_id)
+
+    surviving = [row["id"] for row in list_concepts(goal_id)]
+    if not surviving:
+        raise ValueError("none of the extracted concepts matched your notes")
+    mastery.ensure_rows(surviving)
 
     with db.conn() as c:
         c.execute("UPDATE exam_goals SET status='ready', error=NULL WHERE id=?", (goal_id,))
+
+
+def _prune_ungrounded(goal_id: int) -> int:
+    """Drop concepts no note chunk supports, so nothing untestable reaches a session.
+
+    When *nothing* bound — an empty or unbuilt vector index rather than a concept
+    the notes do not cover — the graph is kept whole: that is a search problem,
+    not evidence about the material.
+    """
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT c.id, COUNT(cs.chunk_id) AS sources FROM concepts c "
+            "LEFT JOIN concept_sources cs ON cs.concept_id = c.id "
+            "WHERE c.goal_id=? GROUP BY c.id",
+            (goal_id,),
+        ).fetchall()
+        ungrounded = [row["id"] for row in rows if not row["sources"]]
+        if not ungrounded or len(ungrounded) == len(rows):
+            return 0
+        marks = ",".join("?" * len(ungrounded))
+        c.execute(
+            f"DELETE FROM concept_edges WHERE concept_id IN ({marks}) "
+            f"OR prereq_id IN ({marks})",
+            ungrounded + ungrounded,
+        )
+        c.execute(f"DELETE FROM concepts WHERE id IN ({marks})", ungrounded)
+    logger.info("dropped %d concepts with no supporting notes", len(ungrounded))
+    return len(ungrounded)
 
 
 def bind_sources(goal_id: int) -> int:

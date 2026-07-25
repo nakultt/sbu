@@ -180,6 +180,78 @@ class GeneratedNoteCleanupTests(unittest.TestCase):
             "# Short source\n\n## Detailed notes\n\n- One factual point",
         )
 
+    def test_drops_bullets_repeated_verbatim_across_parts(self):
+        repeated = "- **Degeneracy:** distinct states that share one energy level"
+
+        assembled = _assemble_structured_notes(
+            "Quantum",
+            [f"## Key concepts\n{repeated}", f"## Key concepts\n{repeated}\n- A second concept"],
+        )
+
+        self.assertEqual(assembled.count("Degeneracy:"), 1)
+        self.assertIn("A second concept", assembled)
+
+    def test_condenses_repeated_per_part_summaries_into_one(self):
+        calls = []
+
+        def fake_chat(system, user, **kwargs):
+            calls.append((system, user))
+            return "## Summary\n\nOne merged overview."
+
+        original = ingest.llm.chat
+        ingest.llm.chat = fake_chat
+        try:
+            assembled = _assemble_structured_notes(
+                "Quantum",
+                [
+                    "## Summary\nThe 1D box is non-degenerate, unlike the 3D box.",
+                    "## Summary\nA 1D box has unique energies while a 3D box degenerates.",
+                    "## Summary\nEnergy levels in one dimension are unique; three dimensions repeat.",
+                ],
+                condense=True,
+            )
+        finally:
+            ingest.llm.chat = original
+
+        self.assertEqual(assembled, "# Quantum\n\n## Summary\n\nOne merged overview.")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("three dimensions repeat", calls[0][1])
+
+    def test_keeps_fragments_when_condensing_fails(self):
+        def failing_chat(system, user, **kwargs):
+            raise RuntimeError("model offline")
+
+        original = ingest.llm.chat
+        ingest.llm.chat = failing_chat
+        try:
+            with self.assertLogs(level="ERROR"):
+                assembled = _assemble_structured_notes(
+                    "Quantum",
+                    ["## Summary\nFirst overview of the material.",
+                     "## Summary\nSecond overview of the same material."],
+                    condense=True,
+                )
+        finally:
+            ingest.llm.chat = original
+
+        self.assertIn("First overview of the material.", assembled)
+        self.assertIn("Second overview of the same material.", assembled)
+
+    def test_single_part_note_is_not_sent_for_condensing(self):
+        def unexpected_chat(system, user, **kwargs):
+            raise AssertionError("single-part notes must not call the merge pass")
+
+        original = ingest.llm.chat
+        ingest.llm.chat = unexpected_chat
+        try:
+            assembled = _assemble_structured_notes(
+                "Quantum", ["## Summary\nOnly one overview."], condense=True,
+            )
+        finally:
+            ingest.llm.chat = original
+
+        self.assertIn("Only one overview.", assembled)
+
 
 if __name__ == "__main__":
     unittest.main()

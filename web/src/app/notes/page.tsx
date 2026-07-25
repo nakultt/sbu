@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Download, FolderInput, Pencil, Play, Trash2, Upload, X } from "lucide-react";
 import NoteMarkdown from "@/components/NoteMarkdown";
 import NoteEditor from "@/components/NoteEditor";
@@ -14,6 +14,10 @@ interface VideoSeek {
   src: string;
   timestamp: number;
   label: string;
+}
+
+function noteContext(n: NotePreview): NoteContext {
+  return { itemId: n.item_id, kind: n.kind, title: n.title ?? "Note", subjectName: n.subject };
 }
 
 interface NoteDetail {
@@ -209,10 +213,6 @@ export default function NotesPage() {
     }
   }
 
-  function noteContext(n: NotePreview): NoteContext {
-    return { itemId: n.item_id, kind: n.kind, title: n.title ?? "Note", subjectName: n.subject };
-  }
-
   const q = query.trim().toLowerCase();
   const visible = q
     ? notes.filter(
@@ -221,6 +221,29 @@ export default function NotesPage() {
       )
     : notes;
   const activeNote = notes.find((n) => n.id === active) ?? null;
+
+  // NoteMarkdown is memoised, so these two props must keep a stable identity
+  // across unrelated state changes or it re-parses the whole note every render.
+  const activeCtx = useMemo(
+    () => (activeNote ? noteContext(activeNote) : null),
+    // noteContext is pure over these fields; activeNote's own identity is
+    // stable while the notes list is unchanged.
+    [activeNote],
+  );
+
+  const activeItemId = activeNote?.item_id;
+  const activeTitle = activeNote?.title;
+  const handleSeek = useCallback(
+    (seconds: number) => {
+      if (activeItemId === undefined) return;
+      setVideoSeek({
+        src: `${API}/api/video/items/${activeItemId}/file`,
+        timestamp: seconds,
+        label: activeTitle ?? "Lecture",
+      });
+    },
+    [activeItemId, activeTitle],
+  );
 
   return (
     <section className="axscreen" style={{ display: "flex", height: "calc(100vh - 60px)", minHeight: 0 }}>
@@ -441,8 +464,8 @@ export default function NotesPage() {
                   <a
                     href={`${API}/api/notes/${activeNote.id}/download`}
                     style={{ padding: 8, color: "var(--dim)" }}
-                    aria-label="Download as Markdown"
-                    title="Download"
+                    aria-label="Download as PDF"
+                    title="Download PDF"
                   >
                     <Download className="h-4 w-4" />
                   </a>
@@ -486,24 +509,20 @@ export default function NotesPage() {
                 editing === activeNote.id ? (
                   <NoteEditor
                     initialMarkdown={detail[activeNote.id]}
-                    ctx={noteContext(activeNote)}
+                    ctx={activeCtx ?? noteContext(activeNote)}
                     saving={savingNote}
                     onSave={(markdown) => saveNote(activeNote, markdown)}
                     onCancel={() => setEditing(null)}
                   />
                 ) : (
                   <article className="study-note" style={{ maxWidth: 760 }}>
-                    <NoteMarkdown
-                      markdown={detail[activeNote.id]}
-                      ctx={noteContext(activeNote)}
-                      onSeek={(seconds) =>
-                        setVideoSeek({
-                          src: `${API}/api/video/items/${activeNote.item_id}/file`,
-                          timestamp: seconds,
-                          label: activeNote.title ?? "Lecture",
-                        })
-                      }
-                    />
+                    {activeCtx && (
+                      <NoteMarkdown
+                        markdown={detail[activeNote.id]}
+                        ctx={activeCtx}
+                        onSeek={handleSeek}
+                      />
+                    )}
                   </article>
                 )
               ) : (

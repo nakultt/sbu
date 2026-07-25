@@ -7,13 +7,15 @@ import LearnNav from "@/components/learn/LearnNav";
 import MasteryCurve from "@/components/charts/MasteryCurve";
 import { GlowButton, MonoLabel, Panel, SectionHeader, StatTile } from "@/components/ui";
 import { learn, type GoalResponse, type HistoryPoint } from "@/lib/learn";
-
-const SUGGESTIONS = ["JEE Physics", "AP Calculus BC", "NEET Biology", "GRE Quantitative"];
+import { getJSON, type Subject } from "@/lib/api";
 
 export default function LearnPage() {
   const router = useRouter();
   const [state, setState] = useState<GoalResponse | null>(null);
   const [history, setHistory] = useState<HistoryPoint[]>([]);
+  // The map is built from your own notes, so your folders are the only
+  // suggestions that can actually produce one.
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -34,6 +36,12 @@ export default function LearnPage() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    getJSON<Subject[]>("/api/subjects")
+      .then((subjects) => setSuggestions(subjects.map((subject) => subject.name).slice(0, 6)))
+      .catch(() => {});
+  }, []);
 
   // While the graph is being generated, poll until it settles either way.
   useEffect(() => {
@@ -102,9 +110,9 @@ export default function LearnPage() {
             What are you studying for?
           </h1>
           <p style={{ fontSize: 14, color: "var(--dim)", maxWidth: 620, lineHeight: 1.65 }}>
-            Study Buddy maps the syllabus into a prerequisite graph of concepts, then binds each
-            concept to your own notes so every question and explanation comes from material you
-            already have.
+            Study Buddy reads your own notes and maps what they teach into a prerequisite graph
+            of concepts. Nothing outside your notes is added, so every question and explanation
+            comes from material you already have. Name a folder to map just that folder.
           </p>
 
           <div style={{ display: "flex", gap: 10, marginTop: 26, flexWrap: "wrap" }}>
@@ -114,7 +122,7 @@ export default function LearnPage() {
               onKeyDown={(event) => {
                 if (event.key === "Enter") void createGoal(name);
               }}
-              placeholder="e.g. AP Calculus BC"
+              placeholder="e.g. a folder or exam name your notes cover"
               style={{
                 flex: "1 1 320px",
                 padding: "12px 15px",
@@ -131,11 +139,18 @@ export default function LearnPage() {
             </GlowButton>
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 16, flexWrap: "wrap" }}>
+          <div
+            style={{
+              display: suggestions.length ? "flex" : "none",
+              gap: 8,
+              marginTop: 16,
+              flexWrap: "wrap",
+            }}
+          >
             <MonoLabel size={9} dim>
-              Try
+              Your folders
             </MonoLabel>
-            {SUGGESTIONS.map((suggestion) => (
+            {suggestions.map((suggestion) => (
               <button
                 key={suggestion}
                 type="button"
@@ -165,9 +180,9 @@ export default function LearnPage() {
             className="h-6 w-6 animate-spin"
             style={{ margin: "0 auto 18px", color: "var(--accent)" }}
           />
-          <div style={{ fontSize: 17, marginBottom: 8 }}>Mapping “{goal.name}” into concepts…</div>
+          <div style={{ fontSize: 17, marginBottom: 8 }}>Reading your notes for “{goal.name}”…</div>
           <MonoLabel size={10} dim>
-            The local model is writing the prerequisite graph. This takes a minute.
+            The local model is extracting concepts from your notes. This takes a minute.
           </MonoLabel>
         </Panel>
       ) : null}

@@ -1,6 +1,7 @@
 """Lecture-video board capture and progressive OCR review helpers."""
 import base64
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,6 +15,65 @@ SAMPLE_SECONDS = 1
 STABLE_DELTA = 3.2
 STABLE_SAMPLES = 3
 MIN_CONTENT_DELTA = 7.0
+
+
+def optimize_for_streaming(video_path: str | Path) -> bool:
+    """Move MP4/MOV metadata to the front for reliable browser seeking.
+
+    FFmpeg writes to a sibling temporary file first so an interrupted or failed
+    remux can never corrupt the uploaded source. Other supported video
+    containers do not use the MP4 ``moov`` atom and are already seekable via
+    HTTP range requests, so they are left unchanged.
+    """
+    source = Path(video_path)
+    if not source.is_file():
+        raise FileNotFoundError(f"Video file not found: {source}")
+    if source.suffix.lower() not in {".mp4", ".mov"}:
+        return False
+
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{source.stem}-streaming-",
+        suffix=source.suffix,
+        dir=source.parent,
+        delete=False,
+    ) as temporary:
+        output = Path(temporary.name)
+
+    try:
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-i",
+                str(source),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-map_metadata",
+                "0",
+                "-map_chapters",
+                "0",
+                "-c",
+                "copy",
+                "-movflags",
+                "+faststart",
+                str(output),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        if output.stat().st_size == 0:
+            raise RuntimeError("FFmpeg produced an empty optimized video")
+        os.chmod(output, source.stat().st_mode)
+        os.replace(output, source)
+        return True
+    finally:
+        output.unlink(missing_ok=True)
 
 
 def _frame_samples(video_path: str):

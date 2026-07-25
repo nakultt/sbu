@@ -31,8 +31,8 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from core import (
-    concepts, db, flashcards, gaps, llm, mastery, notes as notes_module, planner,
-    question_papers, quiz, rag, report, vectorstore,
+    concepts, db, flashcards, gaps, llm, mastery, note_pdf,
+    notes as notes_module, planner, question_papers, quiz, rag, report, vectorstore,
 )
 from core.config import (
     AUDIOBOOKS_DIR, DATA_DIR, FIGURES_DIR, FILES_DIR, HW_CROPS_DIR, HW_PAGES_DIR,
@@ -424,15 +424,26 @@ async def import_notes(backup: UploadFile):
 def download_note(note_id: int):
     with db.conn() as c:
         row = c.execute(
-            "SELECT notes.markdown, items.title FROM notes "
-            "JOIN items ON items.id = notes.item_id WHERE notes.id=?", (note_id,)
+            "SELECT notes.markdown, notes.created_at, items.id AS item_id, items.title, "
+            "subjects.name AS subject FROM notes "
+            "JOIN items ON items.id = notes.item_id "
+            "LEFT JOIN subjects ON subjects.id = items.subject_id "
+            "WHERE notes.id=?", (note_id,)
         ).fetchone()
     if not row:
         raise HTTPException(404, "Note not found")
     return Response(
-        content=row["markdown"],
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{_download_name(row["title"], ".md")}"'},
+        content=note_pdf.to_pdf(
+            row["markdown"],
+            title=row["title"],
+            subject=row["subject"],
+            created_at=row["created_at"],
+            image_paths=note_pdf.image_paths_for_item(row["item_id"]),
+        ),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_download_name(row["title"], ".pdf")}"'
+        },
     )
 
 
