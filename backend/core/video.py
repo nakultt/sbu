@@ -223,13 +223,22 @@ def consolidate_frame(frame_id: int, reviewed: bool = True) -> dict:
                        for s in segments if s["raw_text"] or s["table_markdown"])
     image = base64.b64encode(Path(frame["frame_path"]).read_bytes()).decode()
     authority = "verified lecture-board" if reviewed else "candidate lecture"
-    prompt = (f"This {authority} image is the authority. Reconcile the supplied OCR against the COMPLETE image. "
-              "Correct only text or table cells that visibly disagree; do not invent content. Return polished Markdown with "
-              "a concise title, notes, and Markdown tables when visible. Preserve formulas and explain visible diagrams briefly. "
+    # The OCR is a hint, not a subject: earlier prompts asked for a
+    # reconciliation report, and the model dutifully wrote paragraphs about
+    # which words the OCR got wrong. Those reports averaged 3.5 KB per frame,
+    # dwarfed the spoken transcript in note generation, and surfaced in notes
+    # as commentary about OCR quality instead of about the lecture.
+    prompt = (f"This {authority} image is the authority; the supplied OCR is only a hint that may "
+              "contain errors. Write down what the board itself shows, correcting the OCR silently "
+              "against the image and inventing nothing. Return only compact Markdown: one short "
+              "'# ' title line, then the board's content — formulas verbatim, Markdown tables where "
+              "the board has tables, and at most one brief line describing any diagram. Never "
+              "comment on the OCR, its errors, or your own corrections, and never add a notes, "
+              "reconciliation, or commentary section. "
               "If there is no educational writing, diagram, table, or slide, return exactly NO_RELEVANT_CONTENT. "
-              "Output only Markdown.\n\nOCR to reconcile:\n" +
+              "Output only Markdown.\n\nOCR hint:\n" +
               (raw or "(No legible OCR.)"))
-    markdown = llm.chat_vision(prompt, [image], max_tokens=1800)
+    markdown = llm.chat_vision(prompt, [image], max_tokens=700)
     # Some local vision models append the sentinel after a useful answer even
     # when instructed to return it alone. Preserve useful analysis, but never
     # leak the control token into notes or RAG.

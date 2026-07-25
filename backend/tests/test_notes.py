@@ -131,6 +131,67 @@ class GenerateNotesVisualTests(unittest.TestCase):
         self.assertIn("==Ohm's law==", notes)
         self.assertIn("or a short sentence when the complete statement is important", calls[0][0])
 
+    def test_note_omits_the_verbatim_source_transcript(self):
+        # The note is the study guide; the transcript stays in the chunks that
+        # back RAG retrieval, not appended to every lecture note.
+        ingest.llm.chat = lambda system, user, **kw: "## Summary\n\nA lecture summary."
+        transcript = "[@ 0:12] a distinctive spoken sentence about induction"
+
+        notes = ingest._generate_notes(
+            transcript, [{"text": transcript, "ts_start": 12.0}], "Lec",
+        )
+
+        self.assertIn("A lecture summary.", notes)
+        self.assertNotIn("Complete timestamped transcript", notes)
+        self.assertNotIn("a distinctive spoken sentence", notes)
+
+
+class NotePartBudgetTests(unittest.TestCase):
+    """One generated part costs one sequential LLM call, so the count is capped."""
+
+    def test_short_sources_split_on_the_plain_part_size(self):
+        self.assertEqual(ingest._note_part_chars(1_000), ingest.NOTES_INPUT_CHARS)
+        self.assertEqual(
+            ingest._note_part_chars(ingest.NOTES_INPUT_CHARS * ingest.NOTES_MAX_PARTS),
+            ingest.NOTES_INPUT_CHARS,
+        )
+
+    def test_long_sources_widen_parts_instead_of_adding_calls(self):
+        length = ingest.NOTES_INPUT_CHARS * ingest.NOTES_MAX_PARTS * 2
+        part = ingest._note_part_chars(length)
+
+        self.assertGreater(part, ingest.NOTES_INPUT_CHARS)
+        self.assertLessEqual(-(-length // part), ingest.NOTES_MAX_PARTS)
+
+    def test_part_size_never_exceeds_the_prompt_ceiling(self):
+        self.assertEqual(
+            ingest._note_part_chars(10_000_000), ingest.NOTES_MAX_PART_CHARS
+        )
+
+    def test_a_realistic_lecture_stays_within_the_target(self):
+        # 16 minutes of speech plus its board captures, the case that produced
+        # 31 sequential generations before parts were budgeted.
+        parts = -(-40_000 // ingest._note_part_chars(40_000))
+        self.assertLessEqual(parts, ingest.NOTES_MAX_PARTS)
+
+    def test_generation_covers_the_whole_source(self):
+        original = ingest.llm.chat
+        parts = []
+        ingest.llm.chat = lambda system, user, **kw: (
+            parts.append(user) or "## Summary\n\nPart summary."
+        )
+        try:
+            source = "".join(f"<{n:06d}>" for n in range(20_000))  # 160 KB, uniquely marked
+            ingest._generate_notes(source, [{"text": source}], "Very long lecture")
+        finally:
+            ingest.llm.chat = original
+
+        generations = [part for part in parts if "Source part:" in part]
+        material = "".join(part.split("Source material:\n", 1)[1] for part in generations)
+        self.assertIn("<000000>", material)
+        self.assertIn("<019999>", material)  # the tail is never dropped
+        self.assertLessEqual(len(generations), -(-len(source) // ingest.NOTES_MAX_PART_CHARS))
+
 
 class GeneratedNoteCleanupTests(unittest.TestCase):
     def test_removes_placeholder_references_but_preserves_real_sources_and_math(self):

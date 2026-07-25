@@ -8,6 +8,13 @@ from core.config import LMSTUDIO_API_KEY, LMSTUDIO_BASE_URL, LMSTUDIO_MODEL, VIS
 
 _client = OpenAI(base_url=LMSTUDIO_BASE_URL, api_key=LMSTUDIO_API_KEY)
 
+# A local model server drops connections under sustained load — a long lecture
+# sends dozens of back-to-back requests — and one reset used to fail the whole
+# ingestion. The SDK retries connection errors, timeouts and 5xx with backoff;
+# a server that is genuinely down still exhausts these and raises, so the
+# fail-closed behaviour in require_available is unchanged.
+REQUEST_RETRIES = 2
+
 
 class LocalLLMUnavailable(RuntimeError):
     """The only configured LLM endpoint is unavailable or missing its model."""
@@ -34,7 +41,7 @@ def require_available() -> None:
 def chat(system: str, user: str, temperature: float = 0.3, max_tokens: int = 2048,
          model: str | None = None, timeout: float = 60.0) -> str:
     require_available()
-    resp = _client.with_options(timeout=timeout, max_retries=0).chat.completions.create(
+    resp = _client.with_options(timeout=timeout, max_retries=REQUEST_RETRIES).chat.completions.create(
         model=model or LMSTUDIO_MODEL,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=temperature,
@@ -55,7 +62,7 @@ def chat_vision(prompt: str, images_b64: list[str], temperature: float = 0.0,
             "type": "image_url",
             "image_url": {"url": f"data:image/png;base64,{b64}"},
         })
-    resp = _client.with_options(timeout=90.0, max_retries=0).chat.completions.create(
+    resp = _client.with_options(timeout=90.0, max_retries=REQUEST_RETRIES).chat.completions.create(
         model=model or VISION_MODEL,
         messages=[{"role": "user", "content": content}],
         temperature=temperature,
@@ -104,7 +111,7 @@ def chat_json_schema(
 ) -> dict:
     """Use LM Studio's JSON Schema constrained decoding for reliable JSON."""
     require_available()
-    response = _client.with_options(timeout=timeout, max_retries=0).chat.completions.create(
+    response = _client.with_options(timeout=timeout, max_retries=REQUEST_RETRIES).chat.completions.create(
         model=model or LMSTUDIO_MODEL,
         messages=[
             {"role": "system", "content": system},

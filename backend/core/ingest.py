@@ -21,6 +21,16 @@ logger = logging.getLogger(__name__)
 
 CHUNK_CHARS = 900
 NOTES_INPUT_CHARS = 5000
+# Every source part costs one sequential LLM call, so an unbounded part count
+# turns a long lecture into an hour of generation that eventually times out and
+# fails the whole item. Past this target parts widen instead of multiplying,
+# up to the largest prompt worth sending. Source material is never dropped, so
+# something longer than the two multiplied together still adds calls.
+NOTES_MAX_PARTS = 10
+NOTES_MAX_PART_CHARS = 14000
+# A note-sized generation legitimately outruns the default chat timeout on a
+# local model; a part that times out costs the entire ingestion.
+NOTES_CALL_TIMEOUT = 180.0
 # Apple Vision reports quantized confidences (1.0 printed, ~0.3-0.5 handwriting)
 HANDWRITING_CONF_THRESHOLD = 0.8
 
@@ -80,17 +90,27 @@ NOTES_CONDENSE_SYSTEM = (
     "references stay on the fact they belong to. Keep any [[FIG:n]] token on its own line, at most "
     "once each, and never invent one. Write no heading. Output only the merged Markdown body."
 )
-# Per-section shape rules for the merge pass. A section absent here (Detailed
-# notes) is merged windowed instead, to compress repetition without flattening
-# the per-part detail that section exists to carry.
+# Per-section shape rules for the merge pass. Every section carries an explicit
+# ceiling: without one on Detailed notes it simply accumulated each part's
+# fragments, and that section alone reached 32 KB on a 16-minute lecture.
+# Together these target roughly 1500-2500 words for a typical lecture.
 NOTE_CONDENSE_GUIDANCE = {
     "Summary": "Write one paragraph of 3-5 sentences covering the whole document. No bullets.",
     "Key concepts": "Output at most 12 bullets, one distinct concept each, with a bold lead term.",
+    "Detailed notes": (
+        "Output at most 30 bullets in source order, one distinct point each. Group them under "
+        "short '### ' sub-headings when the material has clear topics. Merge every restatement "
+        "into a single bullet and drop anything already stated in another bullet."
+    ),
     "Formulas and definitions": (
         "Output one bullet per distinct formula or definition. Drop exact repeats, and keep each "
         "formula verbatim."
     ),
 }
+NOTE_CONDENSE_FALLBACK = (
+    "Merge only the points that repeat each other. Keep every distinct detail, in the order "
+    "given, as short bullets."
+)
 CONDENSE_INPUT_CHARS = 12000
 CONDENSE_WINDOW_CHARS = 8000
 
@@ -159,6 +179,20 @@ def _dedupe_lines(blocks: list[str]) -> list[str]:
     return out
 
 
+def _condense_windows(blocks: list[str]) -> list[str]:
+    """Group fragments into merge-sized windows, keeping their original order."""
+    windows, current = [], ""
+    for block in blocks:
+        if current and len(current) + len(block) > CONDENSE_WINDOW_CHARS:
+            windows.append(current)
+            current = block
+        else:
+            current = f"{current}\n\n{block}" if current else block
+    if current:
+        windows.append(current)
+    return windows
+
+
 def _condense_section(section: str, blocks: list[str]) -> str:
     """Merge one section's per-part fragments into a single non-repetitive body."""
     guidance = NOTE_CONDENSE_GUIDANCE.get(section)
@@ -166,34 +200,29 @@ def _condense_section(section: str, blocks: list[str]) -> str:
     if len(blocks) < 2:
         return body
 
-    if guidance:
-        windows = [body[:CONDENSE_INPUT_CHARS]]
-    else:
-        # No global shape to impose: merge in windows so distinct detail and its
-        # order survive while adjacent restatements collapse.
-        guidance = (
-            "Merge only the points that repeat each other. Keep every distinct detail, in the "
-            "order given, as short bullets."
-        )
-        windows, current = [], ""
-        for block in blocks:
-            if current and len(current) + len(block) > CONDENSE_WINDOW_CHARS:
-                windows.append(current)
-                current = block
-            else:
-                current = f"{current}\n\n{block}" if current else block
-        if current:
-            windows.append(current)
+    # A section that fits gets one pass, so its ceiling applies to the whole
+    # section. Anything longer is merged in windows rather than truncated to the
+    # first CONDENSE_INPUT_CHARS, which silently dropped the tail of a section.
+    windows = [body] if len(body) <= CONDENSE_INPUT_CHARS else _condense_windows(blocks)
+    if guidance is None:
+        # Without a ceiling to enforce there is nothing to gain from a pass that
+        # merges a block with itself.
+        guidance = NOTE_CONDENSE_FALLBACK
         if len(windows) == len(blocks):
-            return body  # nothing to merge; each block already stands alone
+            return body  # each block already stands alone
 
     merged = []
-    for window in windows:
+    for number, window in enumerate(windows, start=1):
+        scope = "" if len(windows) == 1 else (
+            f"\nThese are group {number} of {len(windows)} groups of fragments, so apply any "
+            "stated limit proportionally to this group alone."
+        )
         try:
             result = llm.chat(
                 NOTES_CONDENSE_SYSTEM,
-                f"Section: {section}\n{guidance}\n\nFragments:\n{window}",
+                f"Section: {section}\n{guidance}{scope}\n\nFragments:\n{window}",
                 max_tokens=1200,
+                timeout=NOTES_CALL_TIMEOUT,
             )
         except Exception:
             logger.exception("Could not condense note section %r; keeping fragments", section)
@@ -471,6 +500,22 @@ def _collect_visuals(item: dict, chunks: list[dict]) -> list[dict]:
     return visuals
 
 
+def _note_part_chars(length: int) -> int:
+    """Chars per generated section, widened to hold long sources to the target.
+
+    Splitting purely by ``NOTES_INPUT_CHARS`` made the call count scale with the
+    source: a 16-minute lecture became 31 sequential generations, which both
+    timed out and produced 31 near-identical Summary paragraphs to merge back.
+    Widening is capped at ``NOTES_MAX_PART_CHARS`` because coverage of the
+    source matters more than the target — a source larger than the two
+    multiplied together spends extra calls rather than losing its tail.
+    """
+    if length <= NOTES_INPUT_CHARS * NOTES_MAX_PARTS:
+        return NOTES_INPUT_CHARS
+    widened = (length + NOTES_MAX_PARTS - 1) // NOTES_MAX_PARTS
+    return min(widened, NOTES_MAX_PART_CHARS)
+
+
 def _generate_notes(full_text: str, chunks: list[dict], title: str = "Study notes",
                     visuals: list[dict] | None = None) -> str:
     from core.notes import build_manifest_block, place_visuals
@@ -478,14 +523,17 @@ def _generate_notes(full_text: str, chunks: list[dict], title: str = "Study note
     visuals = visuals or []
     manifest = build_manifest_block(visuals)
     sections = []
-    part_count = max(1, (len(full_text) + NOTES_INPUT_CHARS - 1) // NOTES_INPUT_CHARS)
-    for part_number, i in enumerate(range(0, len(full_text), NOTES_INPUT_CHARS), start=1):
-        part = full_text[i:i + NOTES_INPUT_CHARS]
+    part_chars = _note_part_chars(len(full_text))
+    part_count = max(1, (len(full_text) + part_chars - 1) // part_chars)
+    for part_number, i in enumerate(range(0, len(full_text), part_chars), start=1):
+        part = full_text[i:i + part_chars]
         prompt = (
             f"Document title: {title}\nSource part: {part_number} of {part_count}\n\n"
             f"Source material:\n{part}{manifest}"
         )
-        sections.append(llm.chat(NOTES_SYSTEM, prompt, max_tokens=1800))
+        sections.append(llm.chat(
+            NOTES_SYSTEM, prompt, max_tokens=1400, timeout=NOTES_CALL_TIMEOUT,
+        ))
     # One part cannot repeat itself across parts, so skip the merge pass and its
     # cost for short sources.
     notes = _assemble_structured_notes(title, sections, condense=len(sections) > 1)
@@ -503,11 +551,10 @@ def _generate_notes(full_text: str, chunks: list[dict], title: str = "Study note
                 for stage in diagram["stages"]
             )
         )
-    # Keep the source material in the note as well as the LLM's study guide.
-    # This is deliberately not truncated: a lecture upload must retain its
-    # complete timestamped transcript for reading and RAG retrieval.
-    if any(chunk.get("ts_start") is not None for chunk in chunks):
-        notes += "\n\n## Complete timestamped transcript\n\n" + full_text
+    # The note is the study guide, not a copy of the source. The complete
+    # timestamped transcript used to be appended here, which made it ~70% of a
+    # lecture note; it is still stored verbatim as chunks, so RAG retrieval and
+    # the timestamp links into the player are unaffected.
     # Visuals are placed inline at their page/timestamp anchor, never in a section.
     return place_visuals(notes, visuals)
 
