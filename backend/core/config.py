@@ -87,6 +87,17 @@ class Settings:
     google_calendar_redirect_uri: str
     google_calendar_timezone: str
     web_base_url: str
+    pet_poll_seconds: int
+    pet_notice_seconds: int
+    pet_concerned_seconds: int
+    pet_nag_seconds: int
+    pet_plead_seconds: int
+    pet_recovery_seconds: int
+    pet_bubble_cooldown: int
+    pet_plead_repeat_seconds: int
+    pet_backend_url: str
+    pet_study_apps: tuple[str, ...]
+    pet_distract_hosts: tuple[str, ...]
     data_dir: Path
     inbox_dir: Path
 
@@ -159,6 +170,19 @@ class Settings:
                 "GOOGLE_CALENDAR_TIMEZONE", "Asia/Kolkata"
             ),
             web_base_url=os.getenv("WEB_BASE_URL", "http://localhost:3000").rstrip("/"),
+            pet_poll_seconds=_integer("PET_POLL_SECONDS", 5, maximum=600),
+            pet_notice_seconds=_integer("PET_NOTICE_SECONDS", 90, maximum=86_400),
+            pet_concerned_seconds=_integer("PET_CONCERNED_SECONDS", 180, maximum=86_400),
+            pet_nag_seconds=_integer("PET_NAG_SECONDS", 360, maximum=86_400),
+            pet_plead_seconds=_integer("PET_PLEAD_SECONDS", 600, maximum=86_400),
+            pet_recovery_seconds=_integer("PET_RECOVERY_SECONDS", 60, maximum=86_400),
+            pet_bubble_cooldown=_integer("PET_BUBBLE_COOLDOWN", 90, maximum=86_400),
+            pet_plead_repeat_seconds=_integer(
+                "PET_PLEAD_REPEAT_SECONDS", 240, maximum=86_400
+            ),
+            pet_backend_url=os.getenv("PET_BACKEND_URL", "http://127.0.0.1:8010").rstrip("/"),
+            pet_study_apps=_csv("PET_STUDY_APPS"),
+            pet_distract_hosts=_csv("PET_DISTRACT_HOSTS"),
             data_dir=_path("DATA_DIR", "data"),
             inbox_dir=_path("INBOX_DIR", "inbox"),
         )
@@ -262,6 +286,17 @@ VIDEO_FRAMES_DIR = settings.video_frames_dir
 VIDEO_CROPS_DIR = settings.video_crops_dir
 FIGURES_DIR = settings.figures_dir
 DB_PATH = settings.db_path
+PET_POLL_SECONDS = settings.pet_poll_seconds
+PET_NOTICE_SECONDS = settings.pet_notice_seconds
+PET_CONCERNED_SECONDS = settings.pet_concerned_seconds
+PET_NAG_SECONDS = settings.pet_nag_seconds
+PET_PLEAD_SECONDS = settings.pet_plead_seconds
+PET_RECOVERY_SECONDS = settings.pet_recovery_seconds
+PET_BUBBLE_COOLDOWN = settings.pet_bubble_cooldown
+PET_PLEAD_REPEAT_SECONDS = settings.pet_plead_repeat_seconds
+PET_BACKEND_URL = settings.pet_backend_url
+PET_STUDY_APPS = settings.pet_study_apps
+PET_DISTRACT_HOSTS = settings.pet_distract_hosts
 
 AUDIO_EXTS = frozenset({".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac"})
 VIDEO_EXTS = frozenset({".mp4", ".mov", ".mkv", ".webm", ".avi"})
