@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { LoaderCircle, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { normalizeMath } from "@/lib/mathMarkdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -113,7 +114,7 @@ export default function ConceptAsk({
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={[rehypeKatex]}
           >
-            {answer}
+            {normalizeMath(answer)}
           </ReactMarkdown>
         </div>
       ) : null}

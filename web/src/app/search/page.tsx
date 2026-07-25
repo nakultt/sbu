@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
+import { normalizeMath } from "@/lib/mathMarkdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -342,7 +343,7 @@ function SearchInner() {
               ) : (
                 <div key={turnKey(t, i)} style={{ maxWidth: "85%", border: "1px solid var(--line)", background: "var(--panel2)", padding: "14px 16px" }}>
                   <div className="study-note" style={{ fontSize: 14 }}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{t.content}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeMath(t.content)}</ReactMarkdown>
                   </div>
 
                   {t.sources && t.sources.length > 0 && (

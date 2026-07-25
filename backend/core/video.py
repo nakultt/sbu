@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops, ImageFilter, ImageStat
 
-from core import db, llm
+from core import db, llm, mathmd
 from core.config import VIDEO_CROPS_DIR, VIDEO_FRAMES_DIR
 
 SAMPLE_SECONDS = 1
@@ -237,6 +237,9 @@ def consolidate_frame(frame_id: int, reviewed: bool = True) -> dict:
         line for line in markdown.splitlines()
         if line.strip() != "NO_RELEVANT_CONTENT"
     ).strip() or "NO_RELEVANT_CONTENT"
+    # Board formulas arrive in whichever math dialect the vision model prefers,
+    # and this Markdown is read directly and folded into notes.
+    markdown = mathmd.normalize(markdown)
     db.set_video_frame_review(frame_id, raw, markdown, reviewed=reviewed)
     return {"frame": db.get_video_frame(frame_id), "markdown": markdown}
 

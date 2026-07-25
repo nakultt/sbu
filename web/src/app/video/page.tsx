@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { normalizeMath } from "@/lib/mathMarkdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -182,7 +183,7 @@ export default function VideoReviewPage() {
                 {error && <p style={{ marginTop: 12, fontSize: 13, color: "#f87171" }}>{error}</p>}
                 {selected.formatted_markdown && (
                   <div className="study-note" style={{ marginTop: 24, background: "var(--panel2)", padding: 20, fontSize: 14 }}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{selected.formatted_markdown}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>{normalizeMath(selected.formatted_markdown)}</ReactMarkdown>
                   </div>
                 )}
                 {segments.length > 0 && (

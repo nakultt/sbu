@@ -53,6 +53,7 @@ object MarkdownParser {
     private val ordered = Regex("^\\s*(\\d{1,3})[.)]\\s+(.*)$")
     private val rule = Regex("^\\s*(?:[-_*]\\s*){3,}$")
     private val link = Regex("\\[([^\\]]+)\\]\\(([^)\\s]*)\\)")
+    private val mathFenceLanguages = setOf("math", "latex", "tex")
 
     // The ask endpoint emits citations as [[source: label]](target).
     private val doubleLink = Regex("\\[\\[([^\\]]+)\\]\\]\\(([^)\\s]*)\\)")
@@ -66,13 +67,20 @@ object MarkdownParser {
             when {
                 trimmed.isEmpty() -> Unit
                 trimmed.startsWith("```") -> {
+                    val language = trimmed.removePrefix("```").trim().lowercase()
                     val body = mutableListOf<String>()
                     i++
                     while (i < lines.size && !lines[i].trim().startsWith("```")) {
                         body += lines[i]
                         i++
                     }
-                    blocks += MdBlock.Code(body.joinToString("\n"))
+                    // A ```math fence is a formula, not source to show verbatim.
+                    if (language in mathFenceLanguages) {
+                        body.filter { it.isNotBlank() }
+                            .forEach { blocks += MdBlock.Paragraph(listOf(MdInline.Text(MathText.toPlain(it)))) }
+                    } else {
+                        blocks += MdBlock.Code(body.joinToString("\n"))
+                    }
                 }
                 heading.matches(trimmed) -> {
                     val match = heading.matchEntire(trimmed)!!
@@ -117,7 +125,10 @@ object MarkdownParser {
         }
     }
 
-    fun inlines(text: String): List<MdInline> {
+    fun inlines(source: String): List<MdInline> {
+        // Formulas are typeset before any Markdown scanning: the backslashes,
+        // underscores and asterisks inside `$…$` are notation, not markup.
+        val text = MathText.render(source)
         val out = mutableListOf<MdInline>()
         val plain = StringBuilder()
         fun flush() {

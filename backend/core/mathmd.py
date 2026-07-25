@@ -134,9 +134,12 @@ _RUN_AFTER_SPACE = set("\\^_+-=<>*/")
 
 _FUNCTION_GAP = re.compile(f"({'|'.join(sorted(_FUNCTIONS, key=len, reverse=True))}) \\(")
 # A single multiplied term such as ``2ma²`` needs no parentheses in ``a/b``.
-_SIMPLE_TERM = re.compile(
-    "[\\w." + "".join(re.escape(c) for c in {*_SUPERSCRIPTS.values(), *_SUBSCRIPTS.values()}) + "]+"
+_SCRIPT_CHARS = "".join(
+    re.escape(c) for c in {*_SUPERSCRIPTS.values(), *_SUBSCRIPTS.values()}
 )
+_SIMPLE_TERM = re.compile(f"[\\w.{_SCRIPT_CHARS}]+")
+# One symbol, optionally scripted: safe to leave bare even under a fraction bar.
+_SINGLE_FACTOR = re.compile(f"\\w[{_SCRIPT_CHARS}]*")
 
 
 # --------------------------------------------------------------------------- #
@@ -342,8 +345,10 @@ def _render_command(latex: str, index: int, markup: bool) -> tuple[str, int]:
     while index < len(latex) and latex[index].isalpha():
         index += 1
     name = latex[start:index]
-    # TeX swallows the space that terminates a control word, so ``\pi x`` is
-    # "πx" and not "π x". Function names supply their own trailing space.
+    # TeX swallows the space that terminates a control word. Letter-like
+    # symbols want that — ``\pi x`` is "πx" — but a relation or operator still
+    # needs breathing room, so ``\geq a`` stays "≥ a".
+    separated = index < len(latex) and latex[index] == " "
     while index < len(latex) and latex[index] == " ":
         index += 1
 
@@ -386,9 +391,12 @@ def _render_command(latex: str, index: int, markup: bool) -> tuple[str, int]:
         return f"{name} ", index
     if name in _SYMBOLS:
         symbol = _SYMBOLS[name]
+        if separated and not symbol.isalpha():
+            symbol += " "
         return escape(symbol) if markup else symbol, index
     # An unknown command still reads better as its own name than as raw TeX.
-    return escape(name) if markup else name, index
+    text = name + (" " if separated else "")
+    return escape(text) if markup else text, index
 
 
 def _read_argument(latex: str, index: int) -> tuple[str, int]:
@@ -456,7 +464,8 @@ def _bracket(latex: str, markup: bool, *, group: bool = False) -> str:
     inner = _render(latex, markup=markup)
     # Markup tags would make every term look compound, so judge the plain form.
     plain = _render(latex, markup=False) if markup else inner
-    if len(plain) <= 1 or (not group and _SIMPLE_TERM.fullmatch(plain)):
+    pattern = _SINGLE_FACTOR if group else _SIMPLE_TERM
+    if len(plain) <= 1 or pattern.fullmatch(plain):
         return inner
     if plain.startswith("(") and plain.endswith(")"):
         return inner
