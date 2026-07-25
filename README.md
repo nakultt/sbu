@@ -1,4 +1,4 @@
-<![CDATA[<p align="center">
+<p align="center">
   <img src="docs/images/pet.png" alt="Study Buddy mascot" width="200" />
 </p>
 
@@ -41,6 +41,8 @@ respective external services only when configured.
 - **Audiobooks** — locally generated WAV audiobooks from your notes via Kokoro
   TTS.
 - **Native Android client** — full workspace backed by the same live API.
+- **Study pet** — a floating macOS creature that notices distraction and nudges
+  you back with your real tasks, deadlines, and weak concepts.
 - **Telegram & macOS menu-bar** — optional quick-capture clients.
 - **Google Calendar** — OAuth, event display, task/reminder creation, and
   dynamic conflict-aware rescheduling.
@@ -70,6 +72,35 @@ respective external services only when configured.
 
 ---
 
+## Study pet
+
+A floating desktop creature for macOS that watches what you are actually doing
+and nudges you back to work with your own tasks, deadlines, and weak concepts.
+
+```bash
+cd backend && uv run --python 3.12 python -m pet
+```
+
+It samples the frontmost application every five seconds and, for Safari, Chrome,
+Arc, and Brave, the active tab. macOS asks once for permission to control each
+browser; without it the pet still works from the application name alone.
+Nothing is written to disk and nothing leaves the machine—classification and
+dialogue run through local LM Studio, and the activity log is a bounded
+in-memory ring.
+
+Escalation follows continuous distraction: at 90 seconds the pet turns alert, at
+3 minutes it walks to the offending window and speaks, at 6 minutes it names
+what is actually due, and at 10 minutes it pleads and repeats every 4 minutes. A
+minute of real study resets it, and two speech bubbles are never closer than 90
+seconds. Pause it from the 🐾 menu bar before screen sharing.
+
+Every threshold is configurable through the `PET_*` variables documented in
+`.env.docker.example`. Sprites live in `backend/assets/pet/`; replacing the PNGs
+and `meta.json` with real artwork at the same frame size changes nothing else.
+See [backend/README.md](backend/README.md) for the full runbook.
+
+---
+
 ## Architecture
 
 <p align="center">
@@ -78,7 +109,8 @@ respective external services only when configured.
 
 The FastAPI process owns one ingestion worker and persists structured state in
 SQLite. Text chunks and embeddings live in LanceDB. Web, Android, Streamlit,
-Telegram, and the macOS menu-bar app are clients of the same backend contract.
+Telegram, the macOS menu-bar app, and the study pet are clients of the same
+backend contract.
 
 ### Offline-first sync
 
@@ -104,6 +136,7 @@ generation happen server-side, then results are available on all clients.
 | Speech | Moonshine STT, Silero VAD, FFmpeg |
 | Documents | PyMuPDF, Pillow, Apple Vision OCR on macOS |
 | Audio generation | Kokoro TTS, soundfile |
+| Desktop pet | PyObjC/AppKit floating window, rumps menu bar, AppleScript tab sampling |
 | Calendar | Google Calendar API with OAuth 2.0 |
 
 ---
@@ -326,6 +359,8 @@ and response schemas.
 │   │   ├── db.py                 SQLite schema and access
 │   │   ├── question_papers.py    grounded assessment generation
 │   │   └── ...                   RAG, OCR, STT, video, notes, audio
+│   ├── pet/                      macOS study pet loop, state machine, window
+│   ├── assets/pet/               pet sprite sheets and frame metadata
 │   ├── study_buddy/              supervised backend runtime
 │   └── tests/
 ├── web/                          Next.js dashboard
@@ -346,4 +381,3 @@ component-specific details.
 ## License
 
 This project is proprietary. All rights reserved.
-]]>
