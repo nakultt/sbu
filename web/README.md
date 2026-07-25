@@ -1,12 +1,23 @@
 # Study Buddy web
 
-The responsive Next.js 16 workspace for Study Buddy. It uses React 19,
-TypeScript, Tailwind CSS v4, Framer Motion, Manrope for interface copy, and
-Space Grotesk for display type.
+> The responsive Next.js 16 workspace for Study Buddy — built with React 19,
+> TypeScript, Tailwind CSS v4, Framer Motion, Manrope for interface copy, and
+> Space Grotesk for display type.
 
 The App Router pages cover the dashboard, files and capture, notes, cited
 search, tasks, flashcards, handwriting review, video-board review, audiobooks,
 question-paper generation, Google Calendar, and settings.
+
+<table>
+  <tr>
+    <td align="center"><img src="../docs/images/notes.png" width="400" /><br /><strong>Notes</strong></td>
+    <td align="center"><img src="../docs/images/search.png" width="400" /><br /><strong>Ask My Notes</strong></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="../docs/images/flashcards.png" width="400" /><br /><strong>Flashcards</strong></td>
+    <td align="center"><img src="../docs/images/question-papers.png" width="400" /><br /><strong>Question Papers</strong></td>
+  </tr>
+</table>
 
 ## Development
 

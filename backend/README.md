@@ -1,11 +1,17 @@
 # Study Buddy backend
 
-The Python backend is the common API and processing runtime for both the web
-dashboard and mobile clients. It contains the FastAPI service, background ingestion pipeline,
+> The Python backend is the common API and processing runtime for both the web
+> dashboard and mobile clients.
+
+It contains the FastAPI service, background ingestion pipeline,
 editable portable notes, extracted figures, persistent chat, flashcards,
 grounded question papers, Google Calendar integration with conflict-aware
 rescheduling, Telegram UI, handwriting recognition, video-board review, local
 model integrations, Streamlit fallback UI, and macOS menu-bar capture app.
+
+<p align="center">
+  <img src="../docs/images/dashboard.png" alt="Study Buddy dashboard" width="700" />
+</p>
 
 From the repository root, setup dependencies as described in the main README,
 then start the API and ingestion worker with one command:

@@ -1,65 +1,92 @@
-# Study Buddy
+<![CDATA[# Study Buddy
 
-Study Buddy is a local-first personal learning workspace for capturing,
-organizing, searching, and transforming study material. It accepts text,
-images, PDFs, audio, video, and handwritten pages; produces editable Markdown
-notes; and exposes the same FastAPI data model to the Next.js web dashboard and
-native Android client.
+> A local-first personal learning workspace for capturing, organizing,
+> searching, and transforming study material — powered by on-device AI.
+
+Study Buddy accepts text, images, PDFs, audio, video, and handwritten pages;
+produces editable Markdown notes; and exposes the same FastAPI data model to
+the Next.js web dashboard and native Android client.
 
 Core AI processing stays on the laptop through LM Studio, LanceDB, Moonshine
 STT, Apple Vision or the configured vision model, and Kokoro TTS. Optional
 integrations such as Google Calendar and Telegram communicate with their
 respective external services only when configured.
 
+<p align="center">
+  <img src="docs/images/dashboard.png" alt="Study Buddy dashboard" width="800" />
+</p>
+
+---
+
 ## Features
 
-- Asynchronous ingestion for documents, images, recordings, and pasted text.
-- Local classification, structured note generation, and cited RAG answers.
-- Editable notes with import, export, source files, figures, and Mermaid
-  diagrams.
-- Handwriting line segmentation, OCR correction, and conversion into notes.
-- Stable-frame lecture video review with progressive board OCR.
-- Flashcards, grounded question papers with answer keys, tasks, focus timer, and
-  locally generated WAV audiobooks.
-- Native Android workspace backed by the same live API.
-- Optional Telegram and macOS menu-bar capture clients.
-- Google Calendar OAuth, event display, task/reminder creation, and dynamic
-  conflict-aware rescheduling.
+- **Multimodal ingestion** — documents, images, recordings, screenshots, and
+  pasted text, all processed asynchronously.
+- **Local AI classification** — structured note generation and cited RAG answers
+  using on-device models.
+- **Editable notes** — import, export, source files, extracted figures, and
+  Mermaid diagrams.
+- **Handwriting recognition** — line segmentation, OCR correction, and
+  conversion into structured notes.
+- **Lecture video review** — stable-frame board detection with progressive OCR.
+- **Flashcards** — spaced-repetition decks generated from your notes.
+- **Question papers** — grounded assessments with answer keys and print-ready
+  PDFs.
+- **Tasks & focus timer** — plan deadlines and study sessions with a built-in
+  Pomodoro timer.
+- **Audiobooks** — locally generated WAV audiobooks from your notes via Kokoro
+  TTS.
+- **Native Android client** — full workspace backed by the same live API.
+- **Telegram & macOS menu-bar** — optional quick-capture clients.
+- **Google Calendar** — OAuth, event display, task/reminder creation, and
+  dynamic conflict-aware rescheduling.
 
-## Dynamic calendar rescheduling
+---
 
-Uploaded material is checked for explicit upcoming commitments—not only exams,
-but also classes, meetings, appointments, travel, shifts, interviews,
-deadlines, and personal plans.
+## Screenshots
 
-When Google Calendar is connected:
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/notes.png" width="400" /><br /><strong>Notes</strong> — Editable Markdown with source video</td>
+    <td align="center"><img src="docs/images/search.png" width="400" /><br /><strong>Ask My Notes</strong> — Cited RAG search with source previews</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/files.png" width="400" /><br /><strong>Capture & Upload</strong> — Record, drag-and-drop, or paste</td>
+    <td align="center"><img src="docs/images/flashcards.png" width="400" /><br /><strong>Flashcards</strong> — Spaced-repetition review</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/calendar.png" width="400" /><br /><strong>Calendar</strong> — Google Calendar with conflict rescheduling</td>
+    <td align="center"><img src="docs/images/question-papers.png" width="400" /><br /><strong>Question Papers</strong> — Grounded assessments from notes</td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/images/tasks.png" width="400" /><br /><strong>Tasks</strong> — Deadlines and focus planning</td>
+    <td align="center"><img src="docs/images/handwriting.png" width="400" /><br /><strong>Handwriting</strong> — Vision-model OCR with learning</td>
+  </tr>
+</table>
 
-1. The ingestion worker extracts dated events from the source.
-2. The planner reads the affected eight-day calendar window.
-3. Safe lower-priority solo events are moved into open 30-minute slots between
-   07:00 and 22:00, searching up to seven days ahead.
-4. The new event is created after the moves succeed.
-5. If creation fails, completed moves are rolled back.
-
-The system does not silently move events with attendees, recurring events,
-protected commitments, or events with equal or higher priority. Cross-day
-moves, more than three changes, and unresolved conflicts are persisted as plans
-for review in the web calendar. Every applied or dismissed plan is recorded in
-SQLite.
-
-Google Calendar access is optional. Without OAuth configuration, extracted
-events remain reviewable proposals and the rest of ingestion continues
-normally.
+---
 
 ## Architecture
 
-![System architecture and RAG pipeline](architecture_pipeline.png)
+<p align="center">
+  <img src="docs/images/architecture.png" alt="System architecture and RAG pipeline" width="700" />
+</p>
 
 The FastAPI process owns one ingestion worker and persists structured state in
 SQLite. Text chunks and embeddings live in LanceDB. Web, Android, Streamlit,
 Telegram, and the macOS menu-bar app are clients of the same backend contract.
 
-![Offline-first sync workflow](offline_sync_flow.png)
+### Offline-first sync
+
+<p align="center">
+  <img src="docs/images/offline-sync.png" alt="Offline-first sync workflow" width="700" />
+</p>
+
+Content captured on mobile or via the menu-bar app queues locally and syncs
+with the laptop backend when reachable. Processing, indexing, and note
+generation happen server-side, then results are available on all clients.
+
+---
 
 ## Technology
 
@@ -75,6 +102,8 @@ Telegram, and the macOS menu-bar app are clients of the same backend contract.
 | Audio generation | Kokoro TTS, soundfile |
 | Calendar | Google Calendar API with OAuth 2.0 |
 
+---
+
 ## Requirements
 
 - Python 3.12
@@ -88,6 +117,8 @@ Telegram, and the macOS menu-bar app are clients of the same backend contract.
 Install FFmpeg with `brew install ffmpeg` on macOS,
 `sudo apt install ffmpeg` on Debian/Ubuntu, or `winget install FFmpeg` on
 Windows.
+
+---
 
 ## Quick start
 
@@ -124,6 +155,35 @@ The fallback Streamlit UI can be started from `backend/`:
 ```bash
 uv run --python 3.12 streamlit run app.py
 ```
+
+---
+
+## Dynamic calendar rescheduling
+
+Uploaded material is checked for explicit upcoming commitments — not only exams,
+but also classes, meetings, appointments, travel, shifts, interviews,
+deadlines, and personal plans.
+
+When Google Calendar is connected:
+
+1. The ingestion worker extracts dated events from the source.
+2. The planner reads the affected eight-day calendar window.
+3. Safe lower-priority solo events are moved into open 30-minute slots between
+   07:00 and 22:00, searching up to seven days ahead.
+4. The new event is created after the moves succeed.
+5. If creation fails, completed moves are rolled back.
+
+The system does not silently move events with attendees, recurring events,
+protected commitments, or events with equal or higher priority. Cross-day
+moves, more than three changes, and unresolved conflicts are persisted as plans
+for review in the web calendar. Every applied or dismissed plan is recorded in
+SQLite.
+
+Google Calendar access is optional. Without OAuth configuration, extracted
+events remain reviewable proposals and the rest of ingestion continues
+normally.
+
+---
 
 ## Docker
 
@@ -193,6 +253,8 @@ The APK is written to `dist/android/study-buddy-debug.apk`. Set
 `ANDROID_API_URL` in `.env.docker` to the initial backend address embedded in
 the build; users can still change it in the app.
 
+---
+
 ## Google Calendar setup
 
 Create a Google Cloud OAuth web client, enable the Calendar API, and add this
@@ -215,6 +277,8 @@ Connect the account from the Calendar page. The requested
 `calendar.events` scope permits the application to read, create, and move
 events on the primary calendar.
 
+---
+
 ## Checks
 
 ```bash
@@ -223,6 +287,8 @@ make backend-smoke
 bun --cwd web run lint
 bun --cwd web run build
 ```
+
+---
 
 ## Main API groups
 
@@ -239,6 +305,8 @@ bun --cwd web run build
 
 The OpenAPI document at `/api/openapi.json` is the source of truth for request
 and response schemas.
+
+---
 
 ## Repository layout
 
@@ -259,10 +327,19 @@ and response schemas.
 ├── web/                          Next.js dashboard
 ├── mobile/                       native Android client
 ├── scripts/                      development launch helpers
-├── docs/superpowers/             design specifications and plans
+├── docs/
+│   ├── images/                   screenshots and diagrams
+│   └── superpowers/              design specifications and plans
 └── Makefile
 ```
 
 See [backend/README.md](backend/README.md),
 [web/README.md](web/README.md), and [mobile/README.md](mobile/README.md) for
 component-specific details.
+
+---
+
+## License
+
+This project is proprietary. All rights reserved.
+]]>
